@@ -1,4 +1,5 @@
 import type {
+  AdminDailyReport,
   AspectRatio,
   BackgroundStats,
   BackgroundTask,
@@ -240,6 +241,37 @@ export async function checkServerPassword(accessPassword: string): Promise<{ ok:
   return { ok: false, message: data?.message || `验证失败：HTTP ${response.status}` }
 }
 
+
+
+export async function verifyAdminPassword(adminPassword: string): Promise<{ ok: true; message: string }> {
+  const data = await adminPostJson<{ ok?: boolean; message?: string }>(
+    '/api/admin/verify',
+    { adminPassword },
+    adminPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '???????')
+  return { ok: true, message: data.message || '???????' }
+}
+
+export async function getAdminDailyReport(adminPassword: string, date?: string): Promise<AdminDailyReport> {
+  const query = date ? `?date=${encodeURIComponent(date)}` : ''
+  const data = await adminGetJson<{ ok?: boolean; report?: AdminDailyReport; message?: string }>(
+    `/api/admin/daily-report${query}`,
+    adminPassword,
+  )
+  if (!data.ok || !data.report) throw new Error(data.message || '??????')
+  return data.report
+}
+
+export async function updateAccessPasswordByAdmin(adminPassword: string, newPassword: string): Promise<{ ok: true; message: string }> {
+  const data = await adminPostJson<{ ok?: boolean; message?: string }>(
+    '/api/admin/access-password',
+    { newPassword },
+    adminPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '????????')
+  return { ok: true, message: data.message || '???????' }
+}
 export async function uploadImageToPixhost(
   dataUrl: string,
   fileName: string,
@@ -294,6 +326,26 @@ async function getJson<T>(url: string, accessPassword: string): Promise<T> {
   return parseJsonOrThrow<T>(response)
 }
 
+
+
+async function adminPostJson<T>(url: string, body: unknown, adminPassword: string): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Admin-Password': adminPassword,
+    },
+    body: JSON.stringify(body),
+  })
+  return parseJsonOrThrow<T>(response)
+}
+
+async function adminGetJson<T>(url: string, adminPassword: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: { 'X-Admin-Password': adminPassword },
+  })
+  return parseJsonOrThrow<T>(response)
+}
 async function parseJsonOrThrow<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => null) as ({ ok?: boolean; message?: string; status?: number } & Partial<GenerateErrorResponse>) | null
   if (!response.ok) {

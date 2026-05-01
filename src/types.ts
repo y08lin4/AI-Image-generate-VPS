@@ -89,6 +89,26 @@ export interface BackgroundStats {
   totalGenerated: number
 }
 
+export interface AdminFailureReason {
+  reason: string
+  count: number
+}
+
+export interface AdminDailyReport {
+  date: string
+  totalTasks: number
+  totalRequested: number
+  successCount: number
+  failedCount: number
+  pendingCount: number
+  completedTasks: number
+  partialFailedTasks: number
+  failedTasks: number
+  runningTasks: number
+  queuedTasks: number
+  failureReasons: AdminFailureReason[]
+}
+
 export interface GenerateSuccessResponse {
   ok: true
   mode: Mode

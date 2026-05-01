@@ -4,9 +4,11 @@ import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
+import { AccessGate } from './components/AccessGate'
+import { AdminModal } from './components/AdminModal'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
+import { checkServerPassword, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import { addActiveBackgroundTask, loadActiveBackgroundTasks, removeActiveBackgroundTask, DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
@@ -30,6 +32,9 @@ export default function App() {
   const [message, setMessage] = useState<Message>(null)
   const [backgroundStats, setBackgroundStats] = useState<BackgroundStats | null>(null)
   const [syncingCloudTasks, setSyncingCloudTasks] = useState(false)
+  const [unlocked, setUnlocked] = useState(false)
+  const [unlocking, setUnlocking] = useState(false)
+  const [adminOpen, setAdminOpen] = useState(false)
   const uploadCacheRef = useRef(new Map<string, Map<number, UploadResult>>())
   const pollTimersRef = useRef(new Map<string, number>())
   const settingsRef = useRef(settings)
@@ -37,6 +42,32 @@ export default function App() {
   useEffect(() => {
     settingsRef.current = settings
   }, [settings])
+
+  useEffect(() => {
+    const savedPassword = settings.accessPassword.trim()
+    if (!savedPassword) {
+      setUnlocked(false)
+      return
+    }
+    let active = true
+    setUnlocking(true)
+    void checkServerPassword(savedPassword)
+      .then((result) => {
+        if (!active) return
+        setUnlocked(result.ok)
+      })
+      .catch(() => {
+        if (!active) return
+        setUnlocked(false)
+      })
+      .finally(() => {
+        if (!active) return
+        setUnlocking(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [settings.accessPassword])
 
   useEffect(() => {
     void refreshHistory()
@@ -74,6 +105,25 @@ export default function App() {
 
   function showMessage(text: string, type: 'ok' | 'error' | 'info' = 'info') {
     setMessage({ text, type })
+  }
+
+  async function handleUnlock(accessPassword: string) {
+    const password = accessPassword.trim()
+    if (!password) throw new Error('请输入访问密码')
+    setUnlocking(true)
+    try {
+      const result = await checkServerPassword(password)
+      if (!result.ok) throw new Error(result.message || '访问密码验证失败')
+      patchSettings({ accessPassword: password })
+      setUnlocked(true)
+      return
+    } finally {
+      setUnlocking(false)
+    }
+  }
+
+  function handleAccessPasswordUpdated(nextPassword: string) {
+    patchSettings({ accessPassword: nextPassword.trim() })
   }
 
   function patchSettings(patch: Partial<AppSettings>) {
@@ -680,6 +730,16 @@ export default function App() {
 
   const size = getImageSize(ratio, resolution)
 
+  if (!unlocked) {
+    return (
+      <AccessGate
+        initialPassword={settings.accessPassword}
+        loading={unlocking}
+        onUnlock={handleUnlock}
+      />
+    )
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -694,6 +754,7 @@ export default function App() {
           <div className="config-pill" title={settings.baseUrl}>
             <span>{getRequestModeLabel(settings.requestMode)}</span>
           </div>
+          <button type="button" className="ghost-btn" onClick={() => setAdminOpen(true)}>Admin</button>
           <button type="button" className="secondary-btn" onClick={() => setSettingsOpen(true)}>设置</button>
         </div>
       </header>
@@ -837,6 +898,13 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onSave={updateSettings}
         onMessage={showMessage}
+      />
+
+      <AdminModal
+        open={adminOpen}
+        onClose={() => setAdminOpen(false)}
+        onMessage={showMessage}
+        onAccessPasswordUpdated={handleAccessPasswordUpdated}
       />
     </div>
   )

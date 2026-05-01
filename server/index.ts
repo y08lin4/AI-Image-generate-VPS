@@ -140,10 +140,26 @@ interface TaskImageChunkRow {
 
 interface AppConfig {
   port: number
-  accessPassword: string
+  initialAccessPassword: string
+  adminPassword: string
   allowHttpApi: boolean
   allowPrivateHosts: boolean
   dbPath: string
+}
+
+interface AdminVerifyPayload {
+  adminPassword?: string
+}
+
+interface AdminChangePasswordPayload {
+  newPassword?: string
+}
+
+interface DailyTaskStatRow {
+  status: string
+  count: number
+  results_json: string
+  error: string | null
 }
 
 const SIZE_MAP: Record<Exclude<ResolutionTier, 'auto'>, Record<Ratio, string>> = {
@@ -179,7 +195,7 @@ const SIZE_MAP: Record<Exclude<ResolutionTier, 'auto'>, Record<Ratio, string>> =
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, X-Admin-Password, Authorization',
 }
 
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
@@ -195,6 +211,9 @@ const config = loadConfig()
 const db = createDatabase(config.dbPath)
 setupSchema(db)
 markInterruptedTasksAsFailed(db)
+const runtimeState = {
+  accessPassword: initializeAccessPassword(db, config.initialAccessPassword),
+}
 
 const app = express()
 app.disable('x-powered-by')
@@ -209,13 +228,45 @@ app.use((req, res, next) => {
 app.use('/api', express.json({ limit: '120mb' }))
 
 app.get('/api/health', (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
   return json(res, { ok: true, message: 'Server is ready', background: true })
 })
 
+app.post('/api/admin/verify', (req, res) => {
+  const payload = req.body as AdminVerifyPayload
+  const verifyError = verifyAdminPasswordValue(payload?.adminPassword, config)
+  if (verifyError) return jsonError(res, verifyError.type, verifyError.message, verifyError.status)
+  return json(res, { ok: true, message: '管理员验证通过' })
+})
+
+app.get('/api/admin/daily-report', (req, res) => {
+  const adminError = requireAdminPassword(req, config)
+  if (adminError) return jsonError(res, adminError.type, adminError.message, adminError.status)
+
+  const date = String(req.query.date || '').trim() || getBeijingDateKey(Date.now())
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return jsonError(res, 'bad_request', '日期格式无效，应为 YYYY-MM-DD', 400)
+
+  const report = buildDailyReport(db, date)
+  return json(res, { ok: true, report })
+})
+
+app.post('/api/admin/access-password', (req, res) => {
+  const adminError = requireAdminPassword(req, config)
+  if (adminError) return jsonError(res, adminError.type, adminError.message, adminError.status)
+
+  const payload = req.body as AdminChangePasswordPayload
+  const newPassword = String(payload?.newPassword || '').trim()
+  const validationError = validateAccessPassword(newPassword)
+  if (validationError) return jsonError(res, 'bad_request', validationError, 400)
+
+  runtimeState.accessPassword = newPassword
+  saveAccessPassword(db, newPassword)
+  return json(res, { ok: true, message: '访问密码已更新' })
+})
+
 app.post('/api/generate-stream', async (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   let payload: GeneratePayload
@@ -268,7 +319,7 @@ app.post('/api/generate-stream', async (req, res) => {
 })
 
 app.post('/api/upload-pixhost', async (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const payload = req.body as PixhostUploadPayload
@@ -323,7 +374,7 @@ app.get('/api/image-proxy', async (req, res) => {
 })
 
 app.get('/api/stats', (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const today = getBeijingDateKey(Date.now())
@@ -333,7 +384,7 @@ app.get('/api/stats', (req, res) => {
 })
 
 app.post('/api/background-tasks', async (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   let payload: GeneratePayload
@@ -375,7 +426,7 @@ app.post('/api/background-tasks', async (req, res) => {
 })
 
 app.get('/api/background-tasks', (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const limit = clamp(Number(req.query.limit || 20), 1, 100, 20)
@@ -384,7 +435,7 @@ app.get('/api/background-tasks', (req, res) => {
 })
 
 app.get('/api/background-tasks/:taskId', (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const taskId = decodeURIComponent(req.params.taskId)
@@ -394,7 +445,7 @@ app.get('/api/background-tasks/:taskId', (req, res) => {
 })
 
 app.post('/api/background-tasks/:taskId/retry', async (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const taskId = decodeURIComponent(req.params.taskId)
@@ -451,7 +502,7 @@ app.post('/api/background-tasks/:taskId/retry', async (req, res) => {
 })
 
 app.get('/api/background-tasks/:taskId/images/:index', (req, res) => {
-  const authError = requireAccessPassword(req, config)
+  const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
 
   const taskId = decodeURIComponent(req.params.taskId)
@@ -509,8 +560,11 @@ if (fs.existsSync(distPath)) {
 app.listen(config.port, () => {
   console.log(`[server] AI-Image-generate-VPS started on http://0.0.0.0:${config.port}`)
   console.log(`[server] sqlite: ${config.dbPath}`)
-  if (!config.accessPassword || config.accessPassword === 'change-me') {
-    console.warn('[server] ACCESS_PASSWORD 尚未配置，受保护 API 将返回 503')
+  if (!runtimeState.accessPassword || runtimeState.accessPassword === 'change-me') {
+    console.warn('[server] ACCESS_PASSWORD ???????? API ??? 503')
+  }
+  if (!config.adminPassword || config.adminPassword === 'change-me') {
+    console.warn('[server] ADMIN_PASSWORD ????????????? 503')
   }
 })
 
@@ -581,31 +635,73 @@ async function runBackgroundTask(taskId: string) {
   }
 }
 
-function requireAccessPassword(request: Request, appConfig: AppConfig) {
-  const expected = appConfig.accessPassword
+function extractPasswordFromRequest(request: Request, headerName: 'x-access-password' | 'x-admin-password') {
+  const header = request.headers[headerName]
+  const headerPassword = Array.isArray(header) ? header[0] : header
+  const authorization = request.headers.authorization || ''
+  const bearerPassword = authorization.replace(/^Bearer\s+/i, '').trim()
+  return String(headerPassword || bearerPassword || '').trim()
+}
+
+function requireAccessPassword(
+  request: Request,
+  appConfig: AppConfig,
+  state: { accessPassword: string },
+) {
+  const expected = state.accessPassword
   if (!expected || expected === 'change-me') {
     return {
       type: 'invalid_config',
-      message: '服务端访问密码尚未配置，请先设置 ACCESS_PASSWORD',
+      message: '???????????????? ACCESS_PASSWORD',
       status: 503,
     }
   }
 
-  const header = request.headers['x-access-password']
-  const headerPassword = Array.isArray(header) ? header[0] : header
-  const authorization = request.headers.authorization || ''
-  const bearerPassword = authorization.replace(/^Bearer\s+/i, '').trim()
-  const provided = String(headerPassword || bearerPassword || '').trim()
-
+  const provided = extractPasswordFromRequest(request, 'x-access-password')
   if (provided !== expected) {
     return {
       type: 'auth_error',
-      message: '服务端访问密码错误或缺失',
+      message: '????????????',
       status: 401,
     }
   }
 
   return null
+}
+
+function verifyAdminPasswordValue(value: string | undefined, appConfig: AppConfig) {
+  const expected = appConfig.adminPassword
+  if (!expected || expected === 'change-me') {
+    return {
+      type: 'invalid_config',
+      message: '?????????????? ADMIN_PASSWORD',
+      status: 503,
+    }
+  }
+
+  const provided = String(value || '').trim()
+  if (!provided) {
+    return {
+      type: 'auth_error',
+      message: '?????????',
+      status: 401,
+    }
+  }
+
+  if (provided !== expected) {
+    return {
+      type: 'auth_error',
+      message: '???????',
+      status: 401,
+    }
+  }
+
+  return null
+}
+
+function requireAdminPassword(request: Request, appConfig: AppConfig) {
+  const provided = extractPasswordFromRequest(request, 'x-admin-password')
+  return verifyAdminPasswordValue(provided, appConfig)
 }
 
 function normalizePayload(payload: GeneratePayload, appConfig: AppConfig): NormalizedPayload {
@@ -1101,6 +1197,11 @@ function setupSchema(database: DatabaseSync) {
       stat_value INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      setting_key TEXT PRIMARY KEY,
+      setting_value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS task_image_chunks (
       task_id TEXT NOT NULL,
       result_index INTEGER NOT NULL,
@@ -1315,6 +1416,130 @@ function getStatValue(database: DatabaseSync, key: string) {
   return Number(row?.stat_value || 0)
 }
 
+function initializeAccessPassword(database: DatabaseSync, fallbackPassword: string) {
+  const row = database.prepare('SELECT setting_value FROM app_settings WHERE setting_key = ?').get('access_password') as { setting_value: string } | undefined
+  const fromDb = String(row?.setting_value || '').trim()
+  if (fromDb) return fromDb
+
+  const normalizedFallback = String(fallbackPassword || '').trim()
+  if (normalizedFallback) saveAccessPassword(database, normalizedFallback)
+  return normalizedFallback
+}
+
+function saveAccessPassword(database: DatabaseSync, password: string) {
+  const now = Date.now()
+  database
+    .prepare(`INSERT INTO app_settings (setting_key, setting_value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at`)
+    .run('access_password', password, now)
+}
+
+function validateAccessPassword(value: string) {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return '新访问密码不能为空'
+  if (trimmed.length < 4) return '新访问密码至少 4 位'
+  if (trimmed.length > 128) return '新访问密码不能超过 128 位'
+  if (trimmed === 'change-me') return '不能使用默认弱密码 change-me'
+  return ''
+}
+
+function buildDailyReport(database: DatabaseSync, date: string) {
+  const { startMs, endMs } = getDateRangeInBeijing(date)
+  const rows = database
+    .prepare('SELECT status, count, results_json, error FROM tasks WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC')
+    .all(startMs, endMs) as unknown as DailyTaskStatRow[]
+
+  let totalRequested = 0
+  let successCount = 0
+  let failedCount = 0
+  let pendingCount = 0
+  let completedTasks = 0
+  let failedTasks = 0
+  let partialFailedTasks = 0
+  let runningTasks = 0
+  let queuedTasks = 0
+  const failureReasonMap = new Map<string, number>()
+
+  for (const row of rows) {
+    const requested = clamp(Number(row.count), 0, 5000, 0)
+    totalRequested += requested
+
+    if (row.status === 'completed') completedTasks += 1
+    else if (row.status === 'failed') failedTasks += 1
+    else if (row.status === 'partial_failed') partialFailedTasks += 1
+    else if (row.status === 'running') runningTasks += 1
+    else if (row.status === 'queued') queuedTasks += 1
+
+    const results = safeJson<ResultItem[]>(row.results_json, [])
+    let rowSuccess = 0
+    let rowFailed = 0
+
+    for (const item of results) {
+      if (item.ok && (item.remoteUrl || item.localImageUrl || item.image)) {
+        rowSuccess += 1
+      } else if (item.ok) {
+        // 极端情况下 ok=true 但没有图，也计为失败方便定位
+        rowFailed += 1
+        addFailureReason(failureReasonMap, '生成结果为空')
+      } else {
+        rowFailed += 1
+        addFailureReason(failureReasonMap, item.error || item.uploadError || '未知失败')
+      }
+    }
+
+    successCount += rowSuccess
+    failedCount += rowFailed
+    const rowPending = Math.max(0, requested - (rowSuccess + rowFailed))
+    pendingCount += rowPending
+
+    if (row.status === 'failed' && rowFailed === 0 && row.error) {
+      addFailureReason(failureReasonMap, row.error)
+    }
+  }
+
+  const failureReasons = Array.from(failureReasonMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => ({ reason, count }))
+
+  return {
+    date,
+    totalTasks: rows.length,
+    totalRequested,
+    successCount,
+    failedCount,
+    pendingCount,
+    completedTasks,
+    partialFailedTasks,
+    failedTasks,
+    runningTasks,
+    queuedTasks,
+    failureReasons,
+  }
+}
+
+function addFailureReason(map: Map<string, number>, rawReason: string) {
+  const reason = normalizeFailureReason(rawReason)
+  if (!reason) return
+  map.set(reason, (map.get(reason) || 0) + 1)
+}
+
+function normalizeFailureReason(rawReason: string) {
+  const compact = String(rawReason || '').replace(/\s+/g, ' ').trim()
+  if (!compact) return ''
+  return compact.length > 300 ? `${compact.slice(0, 300)}...` : compact
+}
+
+function getDateRangeInBeijing(date: string) {
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) throw new Error('日期格式无效')
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const utcStart = Date.UTC(year, month - 1, day, 0, 0, 0, 0) - 8 * 60 * 60 * 1000
+  return { startMs: utcStart, endMs: utcStart + 24 * 60 * 60 * 1000 }
+}
+
 function getBeijingDateKey(now: number) {
   return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
@@ -1343,7 +1568,8 @@ function loadConfig(): AppConfig {
   const defaultDbPath = path.join(process.cwd(), 'data', 'app.db')
   return {
     port: clamp(Number(process.env.PORT), 1, 65535, 8787),
-    accessPassword: String(process.env.ACCESS_PASSWORD || '').trim(),
+    initialAccessPassword: String(process.env.ACCESS_PASSWORD || '').trim(),
+    adminPassword: String(process.env.ADMIN_PASSWORD || '').trim(),
     allowHttpApi: parseBoolean(process.env.ALLOW_HTTP_API, true),
     allowPrivateHosts: parseBoolean(process.env.ALLOW_PRIVATE_HOSTS, false),
     dbPath: path.resolve(process.env.DB_PATH || defaultDbPath),
