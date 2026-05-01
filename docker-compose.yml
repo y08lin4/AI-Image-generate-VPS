@@ -1,0 +1,11 @@
+services:
+  ai-image-generate-vps:
+    build: .
+    container_name: ai-image-generate-vps
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
