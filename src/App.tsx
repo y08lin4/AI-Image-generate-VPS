@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AppTopbar } from './components/AppTopbar'
+import { CanvasWorkspace } from './components/CanvasWorkspace'
 import { SettingsModal } from './components/SettingsModal'
 import { AccessGate } from './components/AccessGate'
 import { AdminModal } from './components/AdminModal'
 import { GenerateSidebar } from './components/GenerateSidebar'
 import { HistoryPanel } from './components/HistoryPanel'
-import { TaskQueue } from './components/TaskQueue'
-import { WorksSquare } from './components/WorksSquare'
+import { MessageToast, type ToastMessage } from './components/MessageToast'
 import { WorkCommentsModal } from './components/WorkCommentsModal'
 import { UserProfileModal } from './components/UserProfileModal'
-import { getRequestModeLabel, WORK_LIST_PAGE_SIZE } from './lib/appTask'
+import { WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
 import { useAccessSession } from './hooks/useAccessSession'
@@ -18,10 +19,8 @@ import { useGenerateComposer } from './hooks/useGenerateComposer'
 import { useHistoryHub } from './hooks/useHistoryHub'
 import { useTaskActions } from './hooks/useTaskActions'
 import { useWorksHub } from './hooks/useWorksHub'
-import { getImageSize, getResolutionLabel } from './lib/ratios'
+import { getImageSize } from './lib/ratios'
 import './styles.css'
-
-type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
 
 export default function App() {
   const {
@@ -35,7 +34,7 @@ export default function App() {
     updateSettings,
     patchSettings,
   } = useAppSettings()
-  const [message, setMessage] = useState<Message>(null)
+  const [message, setMessage] = useState<ToastMessage | null>(null)
   const [adminOpen, setAdminOpen] = useState(false)
   const settingsRef = useRef(settings)
   const showMessage = useCallback((text: string, type: 'ok' | 'error' | 'info' = 'info') => {
@@ -212,6 +211,42 @@ export default function App() {
     await refreshWorks()
   }, [logoutWithSession, resetForLock, refreshWorks])
 
+  const worksProps = {
+    works,
+    myWorks,
+    favoriteWorks,
+    me,
+    loading: worksLoading,
+    myWorksLoading,
+    favoriteWorksLoading,
+    sort: workSort,
+    offset: workOffset,
+    total: workTotal,
+    pageSize: WORK_LIST_PAGE_SIZE,
+    onRefresh: () => void handleRefreshSquare(),
+    onSortChange: handleChangeWorkSort,
+    onPageChange: handleChangeWorkPage,
+    onToggleLike: (work: typeof works[number]) => void handleToggleLike(work),
+    onToggleFavorite: (work: typeof works[number]) => void handleToggleFavorite(work),
+    onOpenComments: (work: typeof works[number]) => void handleOpenComments(work),
+    onOpenUserProfile: (userId: number) => handleOpenUserProfile(userId),
+    onDeleteMyWork: (work: typeof works[number]) => void handleDeleteMyWork(work),
+  }
+
+  const taskQueueProps = {
+    tasks,
+    onUploadImage: handleUploadImage,
+    onPublishWork: (taskId: string, result: typeof tasks[number]['results'][number]) => void handlePublishWork(taskId, result),
+    onUseAsReference: handleUseAsReference,
+    onMessage: showMessage,
+    onRemove: removeTask,
+    onClearFinished: clearFinishedTasks,
+    onSyncCloudTasks: () => void syncCloudTasks(),
+    onRetryBackgroundTask: (taskId: string) => void handleRetryBackgroundTask(taskId),
+    backgroundStats,
+    syncingCloudTasks,
+  }
+
   if (!unlocked) {
     return (
       <AccessGate
@@ -224,29 +259,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">AI</div>
-          <div>
-            <h1>AI Image Generate</h1>
-            <p>自定义 URL / Key 的私人生图工作台</p>
-          </div>
-        </div>
-        <div className="top-actions">
-          <div className="config-pill" title={settings.baseUrl}>
-            <span>{getRequestModeLabel(settings.requestMode)}</span>
-          </div>
-          <button type="button" className="ghost-btn" onClick={() => setAdminOpen(true)}>Admin</button>
-          <button type="button" className="secondary-btn" onClick={() => setSettingsOpen(true)}>设置</button>
-        </div>
-      </header>
+      <AppTopbar
+        baseUrl={settings.baseUrl}
+        requestMode={settings.requestMode}
+        onOpenAdmin={() => setAdminOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
-      {message ? (
-        <div className={`toast ${message.type}`}>
-          <span>{message.text}</span>
-          <button type="button" onClick={() => setMessage(null)}>×</button>
-        </div>
-      ) : null}
+      <MessageToast message={message} onClose={() => setMessage(null)} />
 
       <main className={`workspace ${historyCollapsed ? 'history-collapsed' : ''}`}>
         <GenerateSidebar
@@ -272,48 +292,16 @@ export default function App() {
           onLogout={handleAuthLogout}
         />
 
-        <section className="canvas-area">
-          <div className="canvas-header">
-            <div>
-              <h2>生成结果</h2>
-              <p>{mode === 'image-to-image' ? '图生图' : '文生图'} · {ratio} · {getResolutionLabel(resolution)} · {size} · {getRequestModeLabel(settings.requestMode)} · 并发 {settings.concurrency}</p>
-            </div>
-          </div>
-          <WorksSquare
-            works={works}
-            myWorks={myWorks}
-            favoriteWorks={favoriteWorks}
-            me={me}
-            loading={worksLoading}
-            myWorksLoading={myWorksLoading}
-            favoriteWorksLoading={favoriteWorksLoading}
-            sort={workSort}
-            offset={workOffset}
-            total={workTotal}
-            pageSize={WORK_LIST_PAGE_SIZE}
-            onRefresh={() => void handleRefreshSquare()}
-            onSortChange={handleChangeWorkSort}
-            onPageChange={handleChangeWorkPage}
-            onToggleLike={(work) => void handleToggleLike(work)}
-            onToggleFavorite={(work) => void handleToggleFavorite(work)}
-            onOpenComments={(work) => void handleOpenComments(work)}
-            onOpenUserProfile={(userId) => handleOpenUserProfile(userId)}
-            onDeleteMyWork={(work) => void handleDeleteMyWork(work)}
-          />
-          <TaskQueue
-            tasks={tasks}
-            onUploadImage={handleUploadImage}
-            onPublishWork={(taskId, result) => void handlePublishWork(taskId, result)}
-            onUseAsReference={handleUseAsReference}
-            onMessage={showMessage}
-            onRemove={removeTask}
-            onClearFinished={clearFinishedTasks}
-            onSyncCloudTasks={() => void syncCloudTasks()}
-            onRetryBackgroundTask={(taskId) => void handleRetryBackgroundTask(taskId)}
-            backgroundStats={backgroundStats}
-            syncingCloudTasks={syncingCloudTasks}
-          />
-        </section>
+        <CanvasWorkspace
+          mode={mode}
+          ratio={ratio}
+          resolution={resolution}
+          size={size}
+          requestMode={settings.requestMode}
+          concurrency={settings.concurrency}
+          worksProps={worksProps}
+          taskQueueProps={taskQueueProps}
+        />
 
         <HistoryPanel
           items={history}
