@@ -13,6 +13,7 @@ import { WorksSquare } from './components/WorksSquare'
 import { WorkCommentsModal } from './components/WorkCommentsModal'
 import { UserProfileModal } from './components/UserProfileModal'
 import { checkServerPassword, createBackgroundTask, createId, createWorkComment, deleteWork, deleteWorkComment, favoriteWork, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, getCurrentUser, getUserProfileById, likeWork, listBackgroundTasks, listMyFavoriteWorks, listMyWorks, listUserWorksById, listWorkComments, listWorks as listWorksSquare, loginUser, logoutUser, publishWork, registerUser, retryBackgroundTask, unfavoriteWork, unlikeWork, uploadImageToPixhost } from './lib/api'
+import { cloudTaskToGenerationTask, getRequestModeLabel, historyItemToGenerationTask, isCloudTaskFinished, WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import { addActiveBackgroundTask, loadActiveBackgroundTasks, removeActiveBackgroundTask, DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
@@ -21,7 +22,19 @@ import './styles.css'
 type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
 
 type UploadResult = { index: number; remoteUrl: string; remoteThumbUrl?: string }
-const WORK_LIST_PAGE_SIZE = 20
+type GenerateTaskPayload = {
+  mode: Mode
+  prompt: string
+  ratio: AspectRatio
+  resolution: ResolutionTier
+  model: string
+  baseUrl: string
+  apiKey: string
+  timeoutSec: number
+  count: number
+  concurrency: number
+  inputImages: InputImage[]
+}
 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
@@ -169,6 +182,10 @@ export default function App() {
     setMessage({ text, type })
   }
 
+  function getAccessPassword() {
+    return settingsRef.current.accessPassword.trim()
+  }
+
   async function handleUnlock(accessPassword: string) {
     const password = accessPassword.trim()
     if (!password) throw new Error('请输入访问密码')
@@ -211,7 +228,7 @@ export default function App() {
   }
 
   async function handleLogin(username: string, password: string) {
-    const accessPassword = settingsRef.current.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     const user = await loginUser(accessPassword, username, password)
     setMe(user)
     showMessage(`欢迎回来，${user.username}`, 'ok')
@@ -219,7 +236,7 @@ export default function App() {
   }
 
   async function handleRegister(username: string, password: string) {
-    const accessPassword = settingsRef.current.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     const user = await registerUser(accessPassword, username, password)
     setMe(user)
     showMessage(`注册成功，欢迎 ${user.username}`, 'ok')
@@ -227,7 +244,7 @@ export default function App() {
   }
 
   async function handleLogout() {
-    const accessPassword = settingsRef.current.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     await logoutUser(accessPassword)
     setMe(null)
     setMyWorks([])
@@ -308,7 +325,7 @@ export default function App() {
   }
 
   async function refreshBackgroundStats() {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) return
     try {
       setBackgroundStats(await getBackgroundStats(password))
@@ -318,7 +335,7 @@ export default function App() {
   }
 
   async function refreshCurrentUser() {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) {
       setMe(null)
       return
@@ -331,7 +348,7 @@ export default function App() {
   }
 
   async function refreshWorks(showError = false) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) {
       setWorks([])
       setWorkTotal(0)
@@ -350,7 +367,7 @@ export default function App() {
   }
 
   async function refreshMyWorks(showError = false) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password || !me) {
       setMyWorks([])
       return
@@ -367,7 +384,7 @@ export default function App() {
   }
 
   async function refreshMyFavorites(showError = false) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password || !me) {
       setFavoriteWorks([])
       return
@@ -384,7 +401,7 @@ export default function App() {
   }
 
   async function refreshWorkComments(workId: number, showError = false) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) return
     setWorkCommentsLoading(true)
     try {
@@ -399,7 +416,7 @@ export default function App() {
   }
 
   async function refreshProfile(userId: number, showError = false) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) return
     setProfileLoading(true)
     try {
@@ -413,39 +430,6 @@ export default function App() {
       if (showError) showMessage(error instanceof Error ? error.message : '加载用户主页失败', 'error')
     } finally {
       setProfileLoading(false)
-    }
-  }
-
-  function getRequestModeLabel(value: AppSettings['requestMode']) {
-    if (value === 'background') return '服务端后台任务'
-    if (value === 'worker') return '服务端流式代理'
-    return '浏览器直连'
-  }
-
-  function isCloudTaskFinished(task: BackgroundTask) {
-    return task.status === 'completed' || task.status === 'failed' || task.status === 'partial_failed'
-  }
-
-  function cloudTaskToGenerationTask(task: BackgroundTask): GenerationTask {
-    return {
-      id: task.id,
-      cloudTaskId: task.id,
-      cloudStatus: task.status,
-      retryOf: task.retryOf,
-      createdAt: task.createdAt,
-      mode: task.mode,
-      requestMode: 'background',
-      prompt: task.prompt,
-      ratio: task.ratio,
-      resolution: task.resolution,
-      size: task.size,
-      model: task.model,
-      count: task.count,
-      concurrency: task.concurrency,
-      status: task.status === 'failed' ? 'failed' : isCloudTaskFinished(task) ? 'completed' : 'running',
-      results: task.results,
-      elapsedMs: task.elapsedMs,
-      error: task.error,
     }
   }
 
@@ -482,7 +466,7 @@ export default function App() {
   }
 
   async function hydrateCloudTaskLocalImages(task: BackgroundTask): Promise<BackgroundTask> {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password || !task.results.some((item) => item.localImageUrl && !item.image)) return task
 
     const hydratedResults = await Promise.all(task.results.map(async (item) => {
@@ -527,7 +511,7 @@ export default function App() {
     if (pollTimersRef.current.has(taskId)) return
 
     const tick = async () => {
-      const password = settingsRef.current.accessPassword.trim()
+      const password = getAccessPassword()
       if (!password) {
         pollTimersRef.current.delete(taskId)
         return
@@ -552,7 +536,7 @@ export default function App() {
   }
 
   async function restoreActiveBackgroundTasks(notify: boolean) {
-    const password = settingsRef.current.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) return
     const active = loadActiveBackgroundTasks()
     if (!active.length) {
@@ -570,7 +554,7 @@ export default function App() {
   }
 
   async function syncCloudTasks() {
-    const password = settings.accessPassword.trim()
+    const password = getAccessPassword()
     if (!password) {
       showMessage('同步云端任务需要先填写服务端访问密码', 'error')
       setSettingsOpen(true)
@@ -589,8 +573,9 @@ export default function App() {
   }
 
   function validateBeforeGenerate() {
-    if ((settings.requestMode === 'worker' || settings.requestMode === 'background') && !settings.accessPassword.trim()) return '请先在设置里填写服务端访问密码'
-    if (settings.autoUploadPixhost && !settings.accessPassword.trim()) return '自动上传图床需要服务端访问密码'
+    const accessPassword = getAccessPassword()
+    if ((settings.requestMode === 'worker' || settings.requestMode === 'background') && !accessPassword) return '请先在设置里填写服务端访问密码'
+    if (settings.autoUploadPixhost && !accessPassword) return '自动上传图床需要服务端访问密码'
     if (!settings.baseUrl.trim()) return '请先填写 API URL'
     if (!settings.apiKey.trim()) return '请先填写 API Key'
     if (!settings.model.trim()) return '请先填写模型名称'
@@ -610,9 +595,10 @@ export default function App() {
     setMessage(null)
     updateSettings(settings)
 
+    const accessPassword = getAccessPassword()
     const startedAt = Date.now()
     const taskId = createId('task')
-    const payload = {
+    const payload: GenerateTaskPayload = {
       mode,
       prompt: prompt.trim(),
       ratio,
@@ -628,7 +614,7 @@ export default function App() {
 
     if (settings.requestMode === 'background') {
       showMessage(mode === 'image-to-image' ? '正在创建后台任务并上传参考图...' : '正在创建后台任务...', 'info')
-      void submitBackgroundTask(payload, settings.accessPassword)
+      void submitBackgroundTask(payload, accessPassword)
       return
     }
 
@@ -649,23 +635,11 @@ export default function App() {
     }
     setTasks((prev) => [task, ...prev])
     showMessage('任务已提交，可以继续提交新任务', 'ok')
-    void runGenerationTask(taskId, payload, settings.requestMode, settings.accessPassword, settings.autoUploadPixhost, startedAt)
+    void runGenerationTask(taskId, payload, settings.requestMode, accessPassword, settings.autoUploadPixhost, startedAt)
   }
 
   async function submitBackgroundTask(
-    payload: {
-      mode: Mode
-      prompt: string
-      ratio: AspectRatio
-      resolution: ResolutionTier
-      model: string
-      baseUrl: string
-      apiKey: string
-      timeoutSec: number
-      count: number
-      concurrency: number
-      inputImages: InputImage[]
-    },
+    payload: GenerateTaskPayload,
     accessPassword: string,
   ) {
     try {
@@ -680,19 +654,7 @@ export default function App() {
 
   async function runGenerationTask(
     taskId: string,
-    payload: {
-      mode: Mode
-      prompt: string
-      ratio: AspectRatio
-      resolution: ResolutionTier
-      model: string
-      baseUrl: string
-      apiKey: string
-      timeoutSec: number
-      count: number
-      concurrency: number
-      inputImages: InputImage[]
-    },
+    payload: GenerateTaskPayload,
     requestMode: AppSettings['requestMode'],
     accessPassword: string,
     autoUploadPixhost: boolean,
@@ -816,13 +778,14 @@ export default function App() {
   }
 
   function handleUploadImage(taskId: string, result: GenerateResultItem) {
-    if (!settings.accessPassword.trim()) {
+    const accessPassword = getAccessPassword()
+    if (!accessPassword) {
       showMessage('上传图床需要先填写服务端访问密码', 'error')
       setSettingsOpen(true)
       return
     }
     if (result.uploading) return
-    void uploadGeneratedResult(taskId, result, settings.accessPassword, true).then(async (uploaded) => {
+    void uploadGeneratedResult(taskId, result, accessPassword, true).then(async (uploaded) => {
       if (!uploaded) return
       await updateHistoryImageUrl(taskId, uploaded.index, uploaded.remoteUrl, uploaded.remoteThumbUrl)
       await refreshHistory()
@@ -834,7 +797,7 @@ export default function App() {
       showMessage('请先登录后再发布作品', 'error')
       return
     }
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     if (!accessPassword) {
       showMessage('缺少服务端访问密码', 'error')
       return
@@ -883,7 +846,7 @@ export default function App() {
       return
     }
 
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     const nextLiked = !work.likedByMe
     const nextLikeCount = Math.max(0, work.likeCount + (nextLiked ? 1 : -1))
     mapWorkCollections((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item)
@@ -902,7 +865,7 @@ export default function App() {
       showMessage('请先登录后再收藏', 'error')
       return
     }
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     const nextFavorited = !work.favoritedByMe
     const nextFavoriteCount = Math.max(0, work.favoriteCount + (nextFavorited ? 1 : -1))
 
@@ -940,7 +903,7 @@ export default function App() {
       showMessage('请先登录后再评论', 'error')
       return
     }
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     try {
       const comment = await createWorkComment(accessPassword, activeCommentWork.id, content)
       setWorkComments((prev) => [comment, ...prev])
@@ -954,7 +917,7 @@ export default function App() {
 
   async function handleDeleteComment(commentId: number) {
     if (!activeCommentWork) return
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     try {
       await deleteWorkComment(accessPassword, commentId)
       setWorkComments((prev) => prev.filter((item) => item.id !== commentId))
@@ -981,7 +944,7 @@ export default function App() {
     }
     if (!confirm(`确认删除作品「${work.title}」？`)) return
 
-    const accessPassword = settings.accessPassword.trim()
+    const accessPassword = getAccessPassword()
     try {
       await deleteWork(accessPassword, work.id)
       removeWorkFromCollections(work.id)
@@ -1013,7 +976,8 @@ export default function App() {
   }
 
   async function handleRetryBackgroundTask(taskId: string) {
-    if (!settings.accessPassword.trim()) {
+    const accessPassword = getAccessPassword()
+    if (!accessPassword) {
       showMessage('重试后台任务需要先填写服务端访问密码', 'error')
       setSettingsOpen(true)
       return
@@ -1034,7 +998,7 @@ export default function App() {
           concurrency: settings.concurrency,
           model: settings.model.trim(),
         },
-        settings.accessPassword.trim(),
+        accessPassword,
       )
       addActiveBackgroundTask(cloudTask.id, cloudTask.createdAt)
       await applyCloudTask(cloudTask)
@@ -1065,34 +1029,7 @@ export default function App() {
 
   function handleShowHistoryInResults(item: HistoryItem) {
     const taskId = `history_${item.id}_${Date.now()}`
-    const results: GenerateResultItem[] = item.images.map((image, index) => {
-      const remoteUrl = item.remoteUrls?.[index] || (/^https?:\/\//i.test(image) ? image : undefined)
-      return {
-        index,
-        ok: true,
-        image,
-        remoteUrl,
-        remoteThumbUrl: item.remoteThumbUrls?.[index],
-      }
-    })
-
-    const task: GenerationTask = {
-      id: taskId,
-      createdAt: item.createdAt,
-      mode: item.mode,
-      requestMode: 'history',
-      prompt: item.prompt,
-      ratio: item.ratio,
-      resolution: item.resolution || 'auto',
-      size: item.size,
-      model: item.model,
-      count: item.images.length,
-      concurrency: 1,
-      status: 'completed',
-      results,
-      elapsedMs: item.elapsedMs,
-    }
-
+    const task = historyItemToGenerationTask(item, taskId)
     setTasks((prev) => [task, ...prev])
     showMessage(`已把历史记录放到生成结果区，共 ${item.images.length} 张`, 'ok')
     window.setTimeout(() => document.querySelector('.canvas-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
