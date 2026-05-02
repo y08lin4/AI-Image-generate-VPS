@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode } from './types'
+import type { GenerateResultItem, HistoryItem } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
@@ -12,12 +12,13 @@ import { AuthPanel } from './components/AuthPanel'
 import { WorksSquare } from './components/WorksSquare'
 import { WorkCommentsModal } from './components/WorkCommentsModal'
 import { UserProfileModal } from './components/UserProfileModal'
-import { createBackgroundTask, createId, fetchBackgroundTaskImage, publishWork, retryBackgroundTask } from './lib/api'
-import { type GenerateTaskPayload, getRequestModeLabel, historyItemToGenerationTask, WORK_LIST_PAGE_SIZE } from './lib/appTask'
+import { fetchBackgroundTaskImage, publishWork, retryBackgroundTask } from './lib/api'
+import { getRequestModeLabel, historyItemToGenerationTask, WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
 import { useAccessSession } from './hooks/useAccessSession'
 import { useAppSettings } from './hooks/useAppSettings'
+import { useGenerateComposer } from './hooks/useGenerateComposer'
 import { useHistoryHub } from './hooks/useHistoryHub'
 import { useWorksHub } from './hooks/useWorksHub'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
@@ -37,14 +38,14 @@ export default function App() {
     updateSettings,
     patchSettings,
   } = useAppSettings()
-  const [mode, setMode] = useState<Mode>('text-to-image')
-  const [prompt, setPrompt] = useState('')
-  const [inputImages, setInputImages] = useState<InputImage[]>([])
   const [message, setMessage] = useState<Message>(null)
   const [adminOpen, setAdminOpen] = useState(false)
   const settingsRef = useRef(settings)
   const showMessage = useCallback((text: string, type: 'ok' | 'error' | 'info' = 'info') => {
     setMessage({ text, type })
+  }, [])
+  const clearMessage = useCallback(() => {
+    setMessage(null)
   }, [])
   const getAccessPassword = useCallback(() => settingsRef.current.accessPassword.trim(), [])
   const {
@@ -123,6 +124,7 @@ export default function App() {
     handleChangeWorkPage,
     handleRefreshSquare,
   } = useWorksHub({ me, getAccessPassword, showMessage })
+  const size = getImageSize(ratio, resolution)
   const {
     backgroundStats,
     syncingCloudTasks,
@@ -135,6 +137,30 @@ export default function App() {
     setTasks,
     onSaveCloudTaskToHistory: saveCloudTaskToHistory,
     onMissingAccessPassword: () => setSettingsOpen(true),
+  })
+  const {
+    mode,
+    setMode,
+    prompt,
+    setPrompt,
+    inputImages,
+    setInputImages,
+    handleGenerate,
+    handleUseAsReference,
+    reusePrompt,
+  } = useGenerateComposer({
+    settings,
+    ratio,
+    resolution,
+    size,
+    updateSettings,
+    getAccessPassword,
+    showMessage,
+    clearMessage,
+    onOpenSettings: () => setSettingsOpen(true),
+    setTasks,
+    runGenerationTask,
+    applyCloudTask,
   })
 
   useEffect(() => {
@@ -187,85 +213,6 @@ export default function App() {
     await logoutWithSession()
     resetForLock()
     await refreshWorks()
-  }
-
-  function validateBeforeGenerate() {
-    const accessPassword = getAccessPassword()
-    if ((settings.requestMode === 'worker' || settings.requestMode === 'background') && !accessPassword) return '请先在设置里填写服务端访问密码'
-    if (settings.autoUploadPixhost && !accessPassword) return '自动上传图床需要服务端访问密码'
-    if (!settings.baseUrl.trim()) return '请先填写 API URL'
-    if (!settings.apiKey.trim()) return '请先填写 API Key'
-    if (!settings.model.trim()) return '请先填写模型名称'
-    if (!prompt.trim()) return '请输入提示词'
-    if (mode === 'image-to-image' && inputImages.length === 0) return '图生图模式需要先上传参考图'
-    return ''
-  }
-
-  function handleGenerate() {
-    const invalid = validateBeforeGenerate()
-    if (invalid) {
-      showMessage(invalid, 'error')
-      setSettingsOpen(true)
-      return
-    }
-
-    setMessage(null)
-    updateSettings(settings)
-
-    const accessPassword = getAccessPassword()
-    const startedAt = Date.now()
-    const taskId = createId('task')
-    const payload: GenerateTaskPayload = {
-      mode,
-      prompt: prompt.trim(),
-      ratio,
-      resolution,
-      model: settings.model.trim(),
-      baseUrl: settings.baseUrl.trim(),
-      apiKey: settings.apiKey.trim(),
-      timeoutSec: settings.timeoutSec,
-      count: settings.count,
-      concurrency: settings.concurrency,
-      inputImages: mode === 'image-to-image' ? inputImages.map((image) => ({ ...image })) : [],
-    }
-
-    if (settings.requestMode === 'background') {
-      showMessage(mode === 'image-to-image' ? '正在创建后台任务并上传参考图...' : '正在创建后台任务...', 'info')
-      void submitBackgroundTask(payload, accessPassword)
-      return
-    }
-
-    const task: GenerationTask = {
-      id: taskId,
-      createdAt: startedAt,
-      mode,
-      requestMode: settings.requestMode,
-      prompt: payload.prompt,
-      ratio,
-      resolution,
-      size,
-      model: payload.model,
-      count: payload.count,
-      concurrency: payload.concurrency,
-      status: 'running',
-      results: [],
-    }
-    setTasks((prev) => [task, ...prev])
-    showMessage('任务已提交，可以继续提交新任务', 'ok')
-    void runGenerationTask(taskId, payload, settings.requestMode, accessPassword, settings.autoUploadPixhost, startedAt)
-  }
-
-  async function submitBackgroundTask(
-    payload: GenerateTaskPayload,
-    accessPassword: string,
-  ) {
-    try {
-      const cloudTask = await createBackgroundTask(payload, accessPassword)
-      await applyCloudTask(cloudTask)
-      showMessage('后台任务已提交，App 切后台也不会丢任务，回前台会自动恢复', 'ok')
-    } catch (error) {
-      showMessage(error instanceof Error ? error.message : '创建后台任务失败', 'error')
-    }
   }
 
   async function handlePublishWork(taskId: string, result: GenerateResultItem) {
@@ -348,25 +295,6 @@ export default function App() {
     }
   }
 
-  function handleUseAsReference(dataUrl: string) {
-    const nextImage = {
-      id: createId('ref'),
-      name: 'generated-reference.png',
-      type: dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/png',
-      dataUrl,
-      size: dataUrl.length,
-    }
-    setInputImages((prev) => {
-      if (prev.length >= 8) {
-        showMessage('参考图最多 8 张，已替换为当前图片', 'info')
-        return [nextImage]
-      }
-      return [...prev, nextImage]
-    })
-    setMode('image-to-image')
-    showMessage('已放入图生图参考图', 'ok')
-  }
-
   function handleShowHistoryInResults(item: HistoryItem) {
     const taskId = `history_${item.id}_${Date.now()}`
     const task = historyItemToGenerationTask(item, taskId)
@@ -374,8 +302,6 @@ export default function App() {
     showMessage(`已把历史记录放到生成结果区，共 ${item.images.length} 张`, 'ok')
     window.setTimeout(() => document.querySelector('.canvas-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
-
-  const size = getImageSize(ratio, resolution)
 
   if (!unlocked) {
     return (
@@ -557,10 +483,7 @@ export default function App() {
           items={history}
           collapsed={historyCollapsed}
           onToggleCollapsed={toggleHistoryCollapsed}
-          onReusePrompt={(value) => {
-            setPrompt(value)
-            showMessage('提示词已复用', 'ok')
-          }}
+          onReusePrompt={reusePrompt}
           onUseImage={handleUseAsReference}
           onShowInResults={handleShowHistoryInResults}
           onDelete={handleDeleteHistory}
