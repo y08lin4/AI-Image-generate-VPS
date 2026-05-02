@@ -15,6 +15,7 @@ import { getRequestModeLabel, WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
 import { useAccessSession } from './hooks/useAccessSession'
+import { useAppLifecycle } from './hooks/useAppLifecycle'
 import { useAppSettings } from './hooks/useAppSettings'
 import { useGenerateComposer } from './hooks/useGenerateComposer'
 import { useHistoryHub } from './hooks/useHistoryHub'
@@ -177,42 +178,26 @@ export default function App() {
     refreshWorks,
     refreshMyWorks,
   })
+  useAppLifecycle({
+    accessPassword: settings.accessPassword,
+    unlocked,
+    meId: me?.id,
+    profileUserId,
+    workSort,
+    workOffset,
+    restoreActiveBackgroundTasks,
+    resetForLock,
+    resetForNoUser,
+    refreshCurrentUser,
+    refreshWorks,
+    refreshMyWorks,
+    refreshMyFavorites,
+    refreshProfile,
+  })
 
   useEffect(() => {
     settingsRef.current = settings
   }, [settings])
-
-  useEffect(() => {
-    if (!settings.accessPassword.trim()) return
-    void restoreActiveBackgroundTasks(false)
-  }, [settings.accessPassword])
-
-  useEffect(() => {
-    if (!unlocked) {
-      resetForLock()
-      return
-    }
-    void refreshCurrentUser()
-  }, [unlocked, settings.accessPassword])
-
-  useEffect(() => {
-    if (!unlocked) return
-    void refreshWorks()
-  }, [unlocked, settings.accessPassword, workSort, workOffset])
-
-  useEffect(() => {
-    if (!unlocked || !me) {
-      resetForNoUser()
-      return
-    }
-    void refreshMyWorks()
-    void refreshMyFavorites()
-  }, [unlocked, me?.id, settings.accessPassword, workSort])
-
-  useEffect(() => {
-    if (!unlocked || !profileUserId) return
-    void refreshProfile(profileUserId)
-  }, [unlocked, profileUserId, settings.accessPassword, workSort])
 
   if (!unlocked) {
     return (
