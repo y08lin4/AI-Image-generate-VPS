@@ -283,3 +283,12 @@ export function useAppDataFlow() {
 }
 
 export type AppDataFlow = ReturnType<typeof useAppDataFlow>
+export type AppFlowAppDomain = AppDataFlow['app']
+export type AppFlowSettingsDomain = AppDataFlow['settings']
+export type AppFlowAuthDomain = AppDataFlow['auth']
+export type AppFlowGenerationDomain = AppDataFlow['generation']
+export type AppFlowWorkspaceDomain = AppDataFlow['workspace']
+export type AppFlowTasksDomain = AppDataFlow['tasks']
+export type AppFlowHistoryDomain = AppDataFlow['history']
+export type AppFlowCommentsDomain = AppDataFlow['comments']
+export type AppFlowProfileDomain = AppDataFlow['profile']

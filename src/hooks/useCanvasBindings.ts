@@ -1,59 +1,82 @@
 import { type ComponentProps, useMemo } from 'react'
 import { CanvasWorkspace } from '../components/CanvasWorkspace'
-import type { AppDataFlow } from './useAppDataFlow'
+import type {
+  AppFlowAppDomain,
+  AppFlowAuthDomain,
+  AppFlowGenerationDomain,
+  AppFlowSettingsDomain,
+  AppFlowTasksDomain,
+  AppFlowWorkspaceDomain,
+} from './useAppDataFlow'
 import { useWorkspaceProps } from './useWorkspaceProps'
 
 type CanvasProps = ComponentProps<typeof CanvasWorkspace>
 
-export function useCanvasBindings(flow: AppDataFlow): CanvasProps {
+interface UseCanvasBindingsOptions {
+  app: AppFlowAppDomain
+  auth: AppFlowAuthDomain
+  generation: AppFlowGenerationDomain
+  settings: AppFlowSettingsDomain
+  workspace: AppFlowWorkspaceDomain
+  tasks: AppFlowTasksDomain
+}
+
+export function useCanvasBindings({
+  app,
+  auth,
+  generation,
+  settings,
+  workspace,
+  tasks,
+}: UseCanvasBindingsOptions): CanvasProps {
   const { worksProps, taskQueueProps } = useWorkspaceProps({
-    works: flow.workspace.works,
-    myWorks: flow.workspace.myWorks,
-    favoriteWorks: flow.workspace.favoriteWorks,
-    me: flow.auth.me,
-    worksLoading: flow.auth.worksLoading,
-    myWorksLoading: flow.workspace.myWorksLoading,
-    favoriteWorksLoading: flow.workspace.favoriteWorksLoading,
-    workSort: flow.workspace.workSort,
-    workOffset: flow.workspace.workOffset,
-    workTotal: flow.workspace.workTotal,
-    onRefreshSquare: flow.workspace.handleRefreshSquare,
-    onChangeWorkSort: flow.workspace.handleChangeWorkSort,
-    onChangeWorkPage: flow.workspace.handleChangeWorkPage,
-    onToggleLike: (work) => void flow.workspace.handleToggleLike(work),
-    onToggleFavorite: (work) => void flow.workspace.handleToggleFavorite(work),
-    onOpenComments: (work) => void flow.workspace.handleOpenComments(work),
-    onOpenUserProfile: (userId) => flow.workspace.handleOpenUserProfile(userId),
-    onDeleteMyWork: (work) => void flow.workspace.handleDeleteMyWork(work),
-    tasks: flow.tasks.tasks,
-    onUploadImage: flow.tasks.handleUploadImage,
-    onPublishWork: (taskId, result) => void flow.tasks.handlePublishWork(taskId, result),
-    onUseAsReference: flow.generation.handleUseAsReference,
-    onMessage: flow.app.showMessage,
-    onRemoveTask: flow.tasks.removeTask,
-    onClearFinishedTasks: flow.tasks.clearFinishedTasks,
-    onSyncCloudTasks: flow.tasks.syncCloudTasks,
-    onRetryBackgroundTask: (taskId) => void flow.tasks.handleRetryBackgroundTask(taskId),
-    backgroundStats: flow.tasks.backgroundStats,
-    syncingCloudTasks: flow.tasks.syncingCloudTasks,
+    works: workspace.works,
+    myWorks: workspace.myWorks,
+    favoriteWorks: workspace.favoriteWorks,
+    me: auth.me,
+    worksLoading: auth.worksLoading,
+    myWorksLoading: workspace.myWorksLoading,
+    favoriteWorksLoading: workspace.favoriteWorksLoading,
+    workSort: workspace.workSort,
+    workOffset: workspace.workOffset,
+    workTotal: workspace.workTotal,
+    onRefreshSquare: workspace.handleRefreshSquare,
+    onChangeWorkSort: workspace.handleChangeWorkSort,
+    onChangeWorkPage: workspace.handleChangeWorkPage,
+    onToggleLike: (work) => void workspace.handleToggleLike(work),
+    onToggleFavorite: (work) => void workspace.handleToggleFavorite(work),
+    onOpenComments: (work) => void workspace.handleOpenComments(work),
+    onOpenUserProfile: (userId) => workspace.handleOpenUserProfile(userId),
+    onDeleteMyWork: (work) => void workspace.handleDeleteMyWork(work),
+    tasks: tasks.tasks,
+    onUploadImage: tasks.handleUploadImage,
+    onPublishWork: (taskId, result) => void tasks.handlePublishWork(taskId, result),
+    onUseAsReference: generation.handleUseAsReference,
+    onMessage: app.showMessage,
+    onRemoveTask: tasks.removeTask,
+    onClearFinishedTasks: tasks.clearFinishedTasks,
+    onSyncCloudTasks: tasks.syncCloudTasks,
+    onRetryBackgroundTask: (taskId) => void tasks.handleRetryBackgroundTask(taskId),
+    backgroundStats: tasks.backgroundStats,
+    syncingCloudTasks: tasks.syncingCloudTasks,
   })
 
   return useMemo(() => ({
-    mode: flow.generation.mode,
-    ratio: flow.settings.ratio,
-    resolution: flow.settings.resolution,
-    size: flow.generation.size,
-    requestMode: flow.settings.settings.requestMode,
-    concurrency: flow.settings.settings.concurrency,
+    mode: generation.mode,
+    ratio: settings.ratio,
+    resolution: settings.resolution,
+    size: generation.size,
+    requestMode: settings.settings.requestMode,
+    concurrency: settings.settings.concurrency,
     worksProps,
     taskQueueProps,
   }), [
-    flow.generation.mode,
-    flow.settings.ratio,
-    flow.settings.resolution,
-    flow.generation.size,
-    flow.settings.settings.requestMode,
-    flow.settings.settings.concurrency,
+    generation.mode,
+    settings.ratio,
+    settings.resolution,
+    generation.size,
+    settings.settings.requestMode,
+    settings.settings.concurrency,
     worksProps,
     taskQueueProps,
   ])
