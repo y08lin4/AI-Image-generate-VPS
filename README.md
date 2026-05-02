@@ -108,6 +108,256 @@ npm run start
 
 ---
 
+## VPS 详细部署教程（Ubuntu 22.04 / 24.04）
+
+下面给一套可直接落地的方案：**Node.js + Systemd + Nginx + HTTPS**。  
+适用于新机器从 0 到上线。
+
+### 0）准备条件
+
+- 一台 Linux VPS（Ubuntu 22.04/24.04）
+- 一个域名（例如 `ai.example.com`）
+- 域名 `A` 记录已指向 VPS 公网 IP
+- 服务器放通 `22 / 80 / 443` 端口
+
+---
+
+### 1）系统初始化
+
+```bash
+sudo apt update && sudo apt -y upgrade
+sudo apt install -y git curl unzip ufw nginx
+```
+
+可选（建议）防火墙：
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+sudo ufw status
+```
+
+---
+
+### 2）安装 Node.js 22+
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v
+npm -v
+```
+
+---
+
+### 3）拉取项目并安装依赖
+
+```bash
+cd /opt
+sudo git clone https://github.com/y08lin4/AI-Image-generate-VPS.git
+sudo chown -R $USER:$USER /opt/AI-Image-generate-VPS
+cd /opt/AI-Image-generate-VPS
+npm install
+```
+
+---
+
+### 4）配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`（必须改密码）：
+
+```env
+PORT=8787
+ACCESS_PASSWORD=请改成强密码
+ADMIN_PASSWORD=请改成另一个强密码
+ALLOW_HTTP_API=false
+ALLOW_PRIVATE_HOSTS=false
+DB_PATH=./data/app.db
+```
+
+> 建议：`ACCESS_PASSWORD` 与 `ADMIN_PASSWORD` 不要相同。  
+> 上线环境建议 `ALLOW_HTTP_API=false`，只允许 HTTPS 上游。
+
+---
+
+### 5）构建并本机验证
+
+```bash
+npm run build
+npm run start
+```
+
+另开终端测试：
+
+```bash
+curl -H "X-Access-Password: 你的ACCESS_PASSWORD" http://127.0.0.1:8787/api/health
+```
+
+返回 `{"ok":true,...}` 即正常。  
+验证后按 `Ctrl + C` 停掉前台进程，继续下一步。
+
+---
+
+### 6）配置 Systemd 常驻运行
+
+创建服务文件：
+
+```bash
+sudo tee /etc/systemd/system/ai-image-generate.service > /dev/null <<'EOF'
+[Unit]
+Description=AI Image Generate VPS
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/AI-Image-generate-VPS
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+启动并设置开机自启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-image-generate
+sudo systemctl status ai-image-generate --no-pager
+```
+
+查看日志：
+
+```bash
+journalctl -u ai-image-generate -f
+```
+
+---
+
+### 7）配置 Nginx 反向代理（含 SSE）
+
+创建站点配置：
+
+```bash
+sudo tee /etc/nginx/sites-available/ai-image-generate > /dev/null <<'EOF'
+server {
+    listen 80;
+    server_name ai.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 关键配置，避免流式被缓冲
+        proxy_buffering off;
+        proxy_request_buffering off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 3600;
+    }
+}
+EOF
+```
+
+启用并重载：
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/ai-image-generate /etc/nginx/sites-enabled/ai-image-generate
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
+### 8）申请 HTTPS 证书（Let’s Encrypt）
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d ai.example.com
+```
+
+测试自动续期：
+
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+### 9）上线后检查清单
+
+- 打开 `https://ai.example.com` 能进入密码门禁页
+- 输入 `ACCESS_PASSWORD` 可进入系统
+- Admin 页面可用 `ADMIN_PASSWORD` 登录
+- `/api/health` 返回 `ok: true`
+- 后台任务可创建、可重试
+- Nginx/系统日志无持续报错
+
+---
+
+### 10）升级发布流程（后续版本）
+
+```bash
+cd /opt/AI-Image-generate-VPS
+git pull
+npm install
+npm run build
+sudo systemctl restart ai-image-generate
+sudo systemctl status ai-image-generate --no-pager
+```
+
+---
+
+### 11）SQLite 备份与恢复
+
+备份：
+
+```bash
+cd /opt/AI-Image-generate-VPS
+mkdir -p backup
+sqlite3 data/app.db ".backup './backup/app-$(date +%F-%H%M%S).db'"
+```
+
+恢复（示例）：
+
+```bash
+cp backup/app-2026-05-02-120000.db data/app.db
+sudo systemctl restart ai-image-generate
+```
+
+---
+
+### 12）常见问题
+
+1. **页面一直提示密码错误**
+   - 检查 `.env` 的 `ACCESS_PASSWORD`
+   - 若管理员已改过密码，以管理员页最新密码为准（已写入数据库）
+
+2. **Actions 显示成功，但服务器没更新**
+   - GitHub 构建成功 ≠ 服务器自动拉取
+   - VPS 仍需执行 `git pull && npm run build && systemctl restart`
+
+3. **流式生成卡住**
+   - 检查 Nginx 是否配置 `proxy_buffering off`
+   - 检查上游 API 是否超时或限流
+
+4. **管理员接口 503**
+   - 说明 `ADMIN_PASSWORD` 未配置或仍是 `change-me`
+
+---
+
 ## Docker 部署
 
 ### 本地构建
