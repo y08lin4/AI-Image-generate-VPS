@@ -1,4 +1,4 @@
-import { type ComponentProps } from 'react'
+import { type ComponentProps, useMemo } from 'react'
 import { AppOverlays } from '../components/AppOverlays'
 import { AppTopbar } from '../components/AppTopbar'
 import { CanvasWorkspace } from '../components/CanvasWorkspace'
@@ -99,19 +99,19 @@ export function useAppUiBindings(flow: AppDataFlow) {
     },
   })
 
-  const topbarProps: TopbarProps = {
+  const topbarProps: TopbarProps = useMemo(() => ({
     baseUrl: flow.settings.baseUrl,
     requestMode: flow.settings.requestMode,
     onOpenAdmin: () => flow.setAdminOpen(true),
     onOpenSettings: () => flow.setSettingsOpen(true),
-  }
+  }), [flow.settings.baseUrl, flow.settings.requestMode, flow.setAdminOpen, flow.setSettingsOpen])
 
-  const toastProps: ToastProps = {
+  const toastProps: ToastProps = useMemo(() => ({
     message: flow.message,
     onClose: () => flow.setMessage(null),
-  }
+  }), [flow.message, flow.setMessage])
 
-  const sidebarProps: SidebarProps = {
+  const sidebarProps: SidebarProps = useMemo(() => ({
     mode: flow.mode,
     prompt: flow.prompt,
     inputImages: flow.inputImages,
@@ -132,9 +132,30 @@ export function useAppUiBindings(flow: AppDataFlow) {
     onLogin: handleAuthLogin,
     onRegister: handleAuthRegister,
     onLogout: handleAuthLogout,
-  }
+  }), [
+    flow.mode,
+    flow.prompt,
+    flow.inputImages,
+    flow.settings,
+    flow.ratio,
+    flow.resolution,
+    flow.size,
+    flow.me,
+    flow.worksLoading,
+    flow.setMode,
+    flow.setPrompt,
+    flow.setInputImages,
+    flow.showMessage,
+    flow.patchSettings,
+    flow.setRatio,
+    flow.setResolution,
+    flow.handleGenerate,
+    handleAuthLogin,
+    handleAuthRegister,
+    handleAuthLogout,
+  ])
 
-  const canvasProps: CanvasProps = {
+  const canvasProps: CanvasProps = useMemo(() => ({
     mode: flow.mode,
     ratio: flow.ratio,
     resolution: flow.resolution,
@@ -143,9 +164,18 @@ export function useAppUiBindings(flow: AppDataFlow) {
     concurrency: flow.settings.concurrency,
     worksProps,
     taskQueueProps,
-  }
+  }), [
+    flow.mode,
+    flow.ratio,
+    flow.resolution,
+    flow.size,
+    flow.settings.requestMode,
+    flow.settings.concurrency,
+    worksProps,
+    taskQueueProps,
+  ])
 
-  const historyProps: HistoryProps = {
+  const historyProps: HistoryProps = useMemo(() => ({
     items: flow.history,
     collapsed: flow.historyCollapsed,
     onToggleCollapsed: flow.toggleHistoryCollapsed,
@@ -155,7 +185,17 @@ export function useAppUiBindings(flow: AppDataFlow) {
     onDelete: flow.handleDeleteHistory,
     onClear: flow.handleClearHistory,
     onMessage: flow.showMessage,
-  }
+  }), [
+    flow.history,
+    flow.historyCollapsed,
+    flow.toggleHistoryCollapsed,
+    flow.reusePrompt,
+    flow.handleUseAsReference,
+    flow.handleShowHistoryInResults,
+    flow.handleDeleteHistory,
+    flow.handleClearHistory,
+    flow.showMessage,
+  ])
 
   return {
     unlocked: flow.unlocked,

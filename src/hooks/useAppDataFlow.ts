@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { type ToastMessage } from '../components/MessageToast'
+import { useAppKernel } from './useAppKernel'
 import { useBackgroundTasks } from './useBackgroundTasks'
 import { useGenerationTasks } from './useGenerationTasks'
 import { useAccessSession } from './useAccessSession'
@@ -23,16 +22,15 @@ export function useAppDataFlow() {
     updateSettings,
     patchSettings,
   } = useAppSettings()
-  const [message, setMessage] = useState<ToastMessage | null>(null)
-  const [adminOpen, setAdminOpen] = useState(false)
-  const settingsRef = useRef(settings)
-  const showMessage = useCallback((text: string, type: 'ok' | 'error' | 'info' = 'info') => {
-    setMessage({ text, type })
-  }, [])
-  const clearMessage = useCallback(() => {
-    setMessage(null)
-  }, [])
-  const getAccessPassword = useCallback(() => settingsRef.current.accessPassword.trim(), [])
+  const {
+    message,
+    setMessage,
+    showMessage,
+    clearMessage,
+    adminOpen,
+    setAdminOpen,
+    getAccessPassword,
+  } = useAppKernel(settings.accessPassword)
   const {
     history,
     historyCollapsed,
@@ -179,10 +177,6 @@ export function useAppDataFlow() {
     refreshMyFavorites,
     refreshProfile,
   })
-
-  useEffect(() => {
-    settingsRef.current = settings
-  }, [settings])
 
   return {
     settings,
