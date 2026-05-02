@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 interface UseAppLifecycleOptions {
   accessPassword: string
@@ -33,35 +33,53 @@ export function useAppLifecycle({
   refreshMyFavorites,
   refreshProfile,
 }: UseAppLifecycleOptions) {
+  const restoreActiveBackgroundTasksRef = useRef(restoreActiveBackgroundTasks)
+  const resetForLockRef = useRef(resetForLock)
+  const resetForNoUserRef = useRef(resetForNoUser)
+  const refreshCurrentUserRef = useRef(refreshCurrentUser)
+  const refreshWorksRef = useRef(refreshWorks)
+  const refreshMyWorksRef = useRef(refreshMyWorks)
+  const refreshMyFavoritesRef = useRef(refreshMyFavorites)
+  const refreshProfileRef = useRef(refreshProfile)
+
+  restoreActiveBackgroundTasksRef.current = restoreActiveBackgroundTasks
+  resetForLockRef.current = resetForLock
+  resetForNoUserRef.current = resetForNoUser
+  refreshCurrentUserRef.current = refreshCurrentUser
+  refreshWorksRef.current = refreshWorks
+  refreshMyWorksRef.current = refreshMyWorks
+  refreshMyFavoritesRef.current = refreshMyFavorites
+  refreshProfileRef.current = refreshProfile
+
   useEffect(() => {
     if (!accessPassword.trim()) return
-    void restoreActiveBackgroundTasks(false)
+    void restoreActiveBackgroundTasksRef.current(false)
   }, [accessPassword])
 
   useEffect(() => {
     if (!unlocked) {
-      resetForLock()
+      resetForLockRef.current()
       return
     }
-    void refreshCurrentUser()
+    void refreshCurrentUserRef.current()
   }, [unlocked, accessPassword])
 
   useEffect(() => {
     if (!unlocked) return
-    void refreshWorks()
+    void refreshWorksRef.current()
   }, [unlocked, accessPassword, workSort, workOffset])
 
   useEffect(() => {
     if (!unlocked || !meId) {
-      resetForNoUser()
+      resetForNoUserRef.current()
       return
     }
-    void refreshMyWorks()
-    void refreshMyFavorites()
+    void refreshMyWorksRef.current()
+    void refreshMyFavoritesRef.current()
   }, [unlocked, meId, accessPassword, workSort])
 
   useEffect(() => {
     if (!unlocked || !profileUserId) return
-    void refreshProfile(profileUserId)
+    void refreshProfileRef.current(profileUserId)
   }, [unlocked, profileUserId, accessPassword, workSort])
 }
