@@ -1,4 +1,18 @@
-import type { AppSettings, BackgroundTask, GenerationTask, HistoryItem } from '../types'
+import type { AppSettings, AspectRatio, BackgroundTask, GenerationTask, HistoryItem, InputImage, Mode, ResolutionTier } from '../types'
+
+export type GenerateTaskPayload = {
+  mode: Mode
+  prompt: string
+  ratio: AspectRatio
+  resolution: ResolutionTier
+  model: string
+  baseUrl: string
+  apiKey: string
+  timeoutSec: number
+  count: number
+  concurrency: number
+  inputImages: InputImage[]
+}
 
 export const WORK_LIST_PAGE_SIZE = 20
 
