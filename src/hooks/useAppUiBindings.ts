@@ -7,17 +7,19 @@ import { useToastBindings } from './useToastBindings'
 import { useTopbarBindings } from './useTopbarBindings'
 
 export function useAppUiBindings(flow: AppDataFlow) {
+  const { app, settings, auth, generation, workspace, tasks, history, comments, profile } = flow
+
   return {
-    unlocked: flow.app.unlocked,
-    unlocking: flow.app.unlocking,
-    accessPassword: flow.app.accessPassword,
-    handleUnlock: flow.app.handleUnlock,
-    topbarProps: useTopbarBindings(flow),
-    toastProps: useToastBindings(flow),
-    workspaceClassName: `workspace ${flow.history.historyCollapsed ? 'history-collapsed' : ''}`,
-    sidebarProps: useSidebarBindings(flow),
-    canvasProps: useCanvasBindings(flow),
-    historyProps: useHistoryBindings(flow),
-    overlayProps: useOverlayBindings(flow),
+    unlocked: app.unlocked,
+    unlocking: app.unlocking,
+    accessPassword: app.accessPassword,
+    handleUnlock: app.handleUnlock,
+    topbarProps: useTopbarBindings({ app, settings }),
+    toastProps: useToastBindings({ app }),
+    workspaceClassName: `workspace ${history.historyCollapsed ? 'history-collapsed' : ''}`,
+    sidebarProps: useSidebarBindings({ app, auth, generation, settings }),
+    canvasProps: useCanvasBindings({ app, auth, generation, settings, workspace, tasks }),
+    historyProps: useHistoryBindings({ app, history }),
+    overlayProps: useOverlayBindings({ app, settings, auth, workspace, comments, profile }),
   }
 }
