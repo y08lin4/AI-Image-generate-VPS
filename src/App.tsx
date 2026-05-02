@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type ComponentProps, useCallback, useEffect, useRef, useState } from 'react'
+import { AppOverlays } from './components/AppOverlays'
 import { AppTopbar } from './components/AppTopbar'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
-import { SettingsModal } from './components/SettingsModal'
 import { AccessGate } from './components/AccessGate'
-import { AdminModal } from './components/AdminModal'
 import { GenerateSidebar } from './components/GenerateSidebar'
 import { HistoryPanel } from './components/HistoryPanel'
 import { MessageToast, type ToastMessage } from './components/MessageToast'
-import { WorkCommentsModal } from './components/WorkCommentsModal'
-import { UserProfileModal } from './components/UserProfileModal'
 import { WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
@@ -247,6 +244,48 @@ export default function App() {
     syncingCloudTasks,
   }
 
+  const overlayProps: ComponentProps<typeof AppOverlays> = {
+    settingsModalProps: {
+      open: settingsOpen,
+      settings,
+      onClose: () => setSettingsOpen(false),
+      onSave: updateSettings,
+      onMessage: showMessage,
+    },
+    adminModalProps: {
+      open: adminOpen,
+      onClose: () => setAdminOpen(false),
+      onMessage: showMessage,
+      onAccessPasswordUpdated: handleAccessPasswordUpdated,
+    },
+    commentsModalProps: {
+      open: Boolean(activeCommentWork),
+      work: activeCommentWork,
+      comments: workComments,
+      total: workCommentsTotal,
+      loading: workCommentsLoading,
+      me,
+      onClose: closeComments,
+      onRefresh: (workId) => void refreshWorkComments(workId, true),
+      onCreate: (content) => void handleCreateComment(content),
+      onDelete: (commentId) => void handleDeleteComment(commentId),
+    },
+    profileModalProps: {
+      open: Boolean(profileUserId),
+      profile: profileData,
+      works: profileWorks,
+      loading: profileLoading,
+      me,
+      onClose: closeProfile,
+      onOpenComments: (work) => {
+        closeProfile()
+        void handleOpenComments(work)
+      },
+      onToggleLike: (work) => void handleToggleLike(work),
+      onToggleFavorite: (work) => void handleToggleFavorite(work),
+    },
+  }
+
   if (!unlocked) {
     return (
       <AccessGate
@@ -316,48 +355,7 @@ export default function App() {
         />
       </main>
 
-      <SettingsModal
-        open={settingsOpen}
-        settings={settings}
-        onClose={() => setSettingsOpen(false)}
-        onSave={updateSettings}
-        onMessage={showMessage}
-      />
-
-      <AdminModal
-        open={adminOpen}
-        onClose={() => setAdminOpen(false)}
-        onMessage={showMessage}
-        onAccessPasswordUpdated={handleAccessPasswordUpdated}
-      />
-
-      <WorkCommentsModal
-        open={Boolean(activeCommentWork)}
-        work={activeCommentWork}
-        comments={workComments}
-        total={workCommentsTotal}
-        loading={workCommentsLoading}
-        me={me}
-        onClose={closeComments}
-        onRefresh={(workId) => void refreshWorkComments(workId, true)}
-        onCreate={(content) => void handleCreateComment(content)}
-        onDelete={(commentId) => void handleDeleteComment(commentId)}
-      />
-
-      <UserProfileModal
-        open={Boolean(profileUserId)}
-        profile={profileData}
-        works={profileWorks}
-        loading={profileLoading}
-        me={me}
-        onClose={closeProfile}
-        onOpenComments={(work) => {
-          closeProfile()
-          void handleOpenComments(work)
-        }}
-        onToggleLike={(work) => void handleToggleLike(work)}
-        onToggleFavorite={(work) => void handleToggleFavorite(work)}
-      />
+      <AppOverlays {...overlayProps} />
     </div>
   )
 }
