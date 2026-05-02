@@ -1,4 +1,4 @@
-import { type ComponentProps, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppOverlays } from './components/AppOverlays'
 import { AppTopbar } from './components/AppTopbar'
 import { CanvasWorkspace } from './components/CanvasWorkspace'
@@ -6,15 +6,17 @@ import { AccessGate } from './components/AccessGate'
 import { GenerateSidebar } from './components/GenerateSidebar'
 import { HistoryPanel } from './components/HistoryPanel'
 import { MessageToast, type ToastMessage } from './components/MessageToast'
-import { WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
 import { useAccessSession } from './hooks/useAccessSession'
+import { useAuthHandlers } from './hooks/useAuthHandlers'
 import { useAppLifecycle } from './hooks/useAppLifecycle'
 import { useAppSettings } from './hooks/useAppSettings'
 import { useGenerateComposer } from './hooks/useGenerateComposer'
 import { useHistoryHub } from './hooks/useHistoryHub'
+import { useOverlayProps } from './hooks/useOverlayProps'
 import { useTaskActions } from './hooks/useTaskActions'
+import { useWorkspaceProps } from './hooks/useWorkspaceProps'
 import { useWorksHub } from './hooks/useWorksHub'
 import { getImageSize } from './lib/ratios'
 import './styles.css'
@@ -192,59 +194,47 @@ export default function App() {
     settingsRef.current = settings
   }, [settings])
 
-  const handleAuthLogin = useCallback(async (username: string, password: string) => {
-    await loginWithSession(username, password)
-    await refreshWorks()
-  }, [loginWithSession, refreshWorks])
+  const { handleAuthLogin, handleAuthRegister, handleAuthLogout } = useAuthHandlers({
+    loginWithSession,
+    registerWithSession,
+    logoutWithSession,
+    resetForLock,
+    refreshWorks,
+  })
 
-  const handleAuthRegister = useCallback(async (username: string, password: string) => {
-    await registerWithSession(username, password)
-    await refreshWorks()
-  }, [registerWithSession, refreshWorks])
-
-  const handleAuthLogout = useCallback(async () => {
-    await logoutWithSession()
-    resetForLock()
-    await refreshWorks()
-  }, [logoutWithSession, resetForLock, refreshWorks])
-
-  const worksProps = {
+  const { worksProps, taskQueueProps } = useWorkspaceProps({
     works,
     myWorks,
     favoriteWorks,
     me,
-    loading: worksLoading,
+    worksLoading,
     myWorksLoading,
     favoriteWorksLoading,
-    sort: workSort,
-    offset: workOffset,
-    total: workTotal,
-    pageSize: WORK_LIST_PAGE_SIZE,
-    onRefresh: () => void handleRefreshSquare(),
-    onSortChange: handleChangeWorkSort,
-    onPageChange: handleChangeWorkPage,
-    onToggleLike: (work: typeof works[number]) => void handleToggleLike(work),
-    onToggleFavorite: (work: typeof works[number]) => void handleToggleFavorite(work),
-    onOpenComments: (work: typeof works[number]) => void handleOpenComments(work),
-    onOpenUserProfile: (userId: number) => handleOpenUserProfile(userId),
-    onDeleteMyWork: (work: typeof works[number]) => void handleDeleteMyWork(work),
-  }
-
-  const taskQueueProps = {
+    workSort,
+    workOffset,
+    workTotal,
+    onRefreshSquare: handleRefreshSquare,
+    onChangeWorkSort: handleChangeWorkSort,
+    onChangeWorkPage: handleChangeWorkPage,
+    onToggleLike: (work) => void handleToggleLike(work),
+    onToggleFavorite: (work) => void handleToggleFavorite(work),
+    onOpenComments: (work) => void handleOpenComments(work),
+    onOpenUserProfile: (userId) => handleOpenUserProfile(userId),
+    onDeleteMyWork: (work) => void handleDeleteMyWork(work),
     tasks,
     onUploadImage: handleUploadImage,
-    onPublishWork: (taskId: string, result: typeof tasks[number]['results'][number]) => void handlePublishWork(taskId, result),
+    onPublishWork: (taskId, result) => void handlePublishWork(taskId, result),
     onUseAsReference: handleUseAsReference,
     onMessage: showMessage,
-    onRemove: removeTask,
-    onClearFinished: clearFinishedTasks,
-    onSyncCloudTasks: () => void syncCloudTasks(),
-    onRetryBackgroundTask: (taskId: string) => void handleRetryBackgroundTask(taskId),
+    onRemoveTask: removeTask,
+    onClearFinishedTasks: clearFinishedTasks,
+    onSyncCloudTasks: syncCloudTasks,
+    onRetryBackgroundTask: (taskId) => void handleRetryBackgroundTask(taskId),
     backgroundStats,
     syncingCloudTasks,
-  }
+  })
 
-  const overlayProps: ComponentProps<typeof AppOverlays> = {
+  const overlayProps = useOverlayProps({
     settingsModalProps: {
       open: settingsOpen,
       settings,
@@ -284,7 +274,7 @@ export default function App() {
       onToggleLike: (work) => void handleToggleLike(work),
       onToggleFavorite: (work) => void handleToggleFavorite(work),
     },
-  }
+  })
 
   if (!unlocked) {
     return (
