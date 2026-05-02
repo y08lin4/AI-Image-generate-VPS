@@ -11,6 +11,23 @@
 
 ---
 
+## 文档索引
+
+- [新增能力（本次）](#whats-new)
+- [功能概览](#features)
+- [主要接口](#api)
+- [环境变量](#env)
+- [本地开发](#local-dev)
+- [生产部署（VPS）](#deploy-vps)
+- [VPS 详细部署教程](#vps-guide)
+- [Docker 部署](#docker)
+- [GitHub 自动打包镜像（GHCR）](#ghcr)
+- [数据说明](#data)
+- [安全建议](#security)
+
+---
+
+<a id="whats-new"></a>
 ## 新增能力（本次）
 
 - **访问门禁**：进入页面前必须输入访问密码（`ACCESS_PASSWORD`）
@@ -23,6 +40,7 @@
 
 ---
 
+<a id="features"></a>
 ## 功能概览
 
 - 文生图 / 图生图（最多 8 张参考图）
@@ -35,6 +53,7 @@
 
 ---
 
+<a id="api"></a>
 ## 主要接口
 
 - `/api/health`
@@ -55,6 +74,7 @@
 
 ---
 
+<a id="env"></a>
 ## 环境变量
 
 复制 `.env.example` 为 `.env`：
@@ -76,6 +96,7 @@ cp .env.example .env
 
 ---
 
+<a id="local-dev"></a>
 ## 本地开发
 
 ```bash
@@ -96,6 +117,7 @@ npm run dev:client
 
 ---
 
+<a id="deploy-vps"></a>
 ## 生产部署（VPS）
 
 ```bash
@@ -108,6 +130,7 @@ npm run start
 
 ---
 
+<a id="vps-guide"></a>
 ## VPS 详细部署教程（Ubuntu 22.04 / 24.04）
 
 下面给一套可直接落地的方案：**Node.js + Systemd + Nginx + HTTPS**。  
@@ -358,6 +381,7 @@ sudo systemctl restart ai-image-generate
 
 ---
 
+<a id="docker"></a>
 ## Docker 部署
 
 ### 本地构建
@@ -385,6 +409,7 @@ docker compose up -d --build
 
 ---
 
+<a id="ghcr"></a>
 ## GitHub 自动打包镜像（GHCR）
 
 已提供工作流：`.github/workflows/docker-publish.yml`
@@ -410,6 +435,7 @@ docker compose up -d --build
 
 ---
 
+<a id="data"></a>
 ## 数据说明
 
 服务端启动时自动建表：
@@ -426,6 +452,7 @@ docker compose up -d --build
 
 ---
 
+<a id="security"></a>
 ## 安全建议
 
 - 必须修改 `ACCESS_PASSWORD` 与 `ADMIN_PASSWORD`
