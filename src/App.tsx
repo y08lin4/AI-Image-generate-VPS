@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RatioPicker } from './components/RatioPicker'
-import { ResolutionPicker } from './components/ResolutionPicker'
-import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
 import { AccessGate } from './components/AccessGate'
 import { AdminModal } from './components/AdminModal'
+import { GenerateSidebar } from './components/GenerateSidebar'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { AuthPanel } from './components/AuthPanel'
 import { WorksSquare } from './components/WorksSquare'
 import { WorkCommentsModal } from './components/WorkCommentsModal'
 import { UserProfileModal } from './components/UserProfileModal'
@@ -21,7 +18,7 @@ import { useGenerateComposer } from './hooks/useGenerateComposer'
 import { useHistoryHub } from './hooks/useHistoryHub'
 import { useTaskActions } from './hooks/useTaskActions'
 import { useWorksHub } from './hooks/useWorksHub'
-import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
+import { getImageSize, getResolutionLabel } from './lib/ratios'
 import './styles.css'
 
 type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
@@ -199,6 +196,22 @@ export default function App() {
     settingsRef.current = settings
   }, [settings])
 
+  const handleAuthLogin = useCallback(async (username: string, password: string) => {
+    await loginWithSession(username, password)
+    await refreshWorks()
+  }, [loginWithSession, refreshWorks])
+
+  const handleAuthRegister = useCallback(async (username: string, password: string) => {
+    await registerWithSession(username, password)
+    await refreshWorks()
+  }, [registerWithSession, refreshWorks])
+
+  const handleAuthLogout = useCallback(async () => {
+    await logoutWithSession()
+    resetForLock()
+    await refreshWorks()
+  }, [logoutWithSession, resetForLock, refreshWorks])
+
   if (!unlocked) {
     return (
       <AccessGate
@@ -236,111 +249,28 @@ export default function App() {
       ) : null}
 
       <main className={`workspace ${historyCollapsed ? 'history-collapsed' : ''}`}>
-        <aside className="sidebar">
-          <section className="panel">
-            <label className="label">模式</label>
-            <div className="mode-tabs">
-              <button type="button" className={mode === 'text-to-image' ? 'active' : ''} onClick={() => setMode('text-to-image')}>文生图</button>
-              <button type="button" className={mode === 'image-to-image' ? 'active' : ''} onClick={() => setMode('image-to-image')}>图生图</button>
-            </div>
-          </section>
-
-          <section className="panel">
-            <label className="label" htmlFor="prompt">提示词</label>
-            <textarea
-              id="prompt"
-              className="prompt-input"
-              placeholder={mode === 'text-to-image' ? '描述你想生成的内容...' : '描述你希望如何修改这张图...'}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
-          </section>
-
-          {mode === 'image-to-image' ? (
-            <section className="panel">
-              <label className="label">参考图片</label>
-              <ImageUploader images={inputImages} onChange={setInputImages} onError={(text) => showMessage(text, 'error')} />
-            </section>
-          ) : null}
-
-          <section className="panel">
-            <label className="label">模型</label>
-            <input
-              className="text-input"
-              value={settings.model}
-              onChange={(e) => patchSettings({ model: e.target.value })}
-              placeholder="gpt-image-2"
-            />
-          </section>
-
-          <section className="panel">
-            <div className="label-row">
-              <label className="label">分辨率档位</label>
-              <span>{getResolutionLabel(resolution)}</span>
-            </div>
-            <ResolutionPicker
-              value={resolution}
-              onChange={(next) => {
-                const nextRatio = normalizeRatioForResolution(ratio, next)
-                setResolution(next)
-                setRatio(nextRatio)
-                patchSettings({ defaultResolution: next, defaultRatio: nextRatio })
-              }}
-            />
-            <small className="hint-text">先选分辨率，再选比例。分辨率选「自动」时，比例也可以固定；固定比例会按标准档尺寸传给接口。</small>
-          </section>
-
-          <section className="panel">
-            <div className="label-row">
-              <label className="label">比例</label>
-              <span>{ratio === 'auto' ? '自动' : ratio}</span>
-            </div>
-            <RatioPicker
-              value={ratio}
-              ratios={getAvailableRatios(resolution)}
-              onChange={(next) => {
-                setRatio(next)
-                patchSettings({ defaultRatio: next })
-              }}
-            />
-            <small className="hint-text">
-              当前请求尺寸：{size}。只有「分辨率=自动」且「比例=自动」时才不传 size；只要选择具体比例就会传实际尺寸，避免 16:9 变成竖图。
-            </small>
-          </section>
-
-          <section className="panel split-2">
-            <label className="field compact">
-              <span>张数</span>
-              <input type="number" min={1} max={12} value={settings.count} onChange={(e) => patchSettings({ count: Number(e.target.value) })} />
-            </label>
-            <label className="field compact">
-              <span>超时</span>
-              <input type="number" min={10} max={900} value={settings.timeoutSec} onChange={(e) => patchSettings({ timeoutSec: Number(e.target.value) })} />
-            </label>
-          </section>
-
-          <button type="button" className="generate-btn" onClick={handleGenerate}>
-            提交任务（{settings.count} 张）
-          </button>
-
-          <AuthPanel
-            me={me}
-            loading={worksLoading}
-            onLogin={async (username, password) => {
-              await loginWithSession(username, password)
-              await refreshWorks()
-            }}
-            onRegister={async (username, password) => {
-              await registerWithSession(username, password)
-              await refreshWorks()
-            }}
-            onLogout={async () => {
-              await logoutWithSession()
-              resetForLock()
-              await refreshWorks()
-            }}
-          />
-        </aside>
+        <GenerateSidebar
+          mode={mode}
+          prompt={prompt}
+          inputImages={inputImages}
+          settings={settings}
+          ratio={ratio}
+          resolution={resolution}
+          size={size}
+          me={me}
+          authLoading={worksLoading}
+          onModeChange={setMode}
+          onPromptChange={setPrompt}
+          onInputImagesChange={setInputImages}
+          onInputImageError={(text) => showMessage(text, 'error')}
+          onPatchSettings={patchSettings}
+          onRatioChange={setRatio}
+          onResolutionChange={setResolution}
+          onGenerate={handleGenerate}
+          onLogin={handleAuthLogin}
+          onRegister={handleAuthRegister}
+          onLogout={handleAuthLogout}
+        />
 
         <section className="canvas-area">
           <div className="canvas-header">
