@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode } from './types'
+import type { GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
@@ -18,8 +18,8 @@ import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
 import { useAccessSession } from './hooks/useAccessSession'
 import { useAppSettings } from './hooks/useAppSettings'
+import { useHistoryHub } from './hooks/useHistoryHub'
 import { useWorksHub } from './hooks/useWorksHub'
-import { addHistory, clearHistory, deleteHistory, getHistory } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import './styles.css'
 
@@ -40,8 +40,6 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('text-to-image')
   const [prompt, setPrompt] = useState('')
   const [inputImages, setInputImages] = useState<InputImage[]>([])
-  const [history, setHistory] = useState<HistoryItem[]>([])
-  const [historyCollapsed, setHistoryCollapsed] = useState(false)
   const [message, setMessage] = useState<Message>(null)
   const [adminOpen, setAdminOpen] = useState(false)
   const settingsRef = useRef(settings)
@@ -49,6 +47,15 @@ export default function App() {
     setMessage({ text, type })
   }, [])
   const getAccessPassword = useCallback(() => settingsRef.current.accessPassword.trim(), [])
+  const {
+    history,
+    historyCollapsed,
+    refreshHistory,
+    saveCloudTaskToHistory,
+    handleDeleteHistory,
+    handleClearHistory,
+    toggleHistoryCollapsed,
+  } = useHistoryHub()
   const {
     me,
     unlocked,
@@ -135,10 +142,6 @@ export default function App() {
   }, [settings])
 
   useEffect(() => {
-    void refreshHistory()
-  }, [])
-
-  useEffect(() => {
     if (!settings.accessPassword.trim()) return
     void restoreActiveBackgroundTasks(false)
   }, [settings.accessPassword])
@@ -184,32 +187,6 @@ export default function App() {
     await logoutWithSession()
     resetForLock()
     await refreshWorks()
-  }
-
-  async function refreshHistory() {
-    setHistory(await getHistory())
-  }
-
-  async function saveCloudTaskToHistory(task: BackgroundTask) {
-    const okResults = task.results.filter((item) => item.ok && (item.remoteUrl || item.image))
-    if (!okResults.length) return
-    await addHistory({
-      id: task.id,
-      createdAt: task.createdAt,
-      mode: task.mode,
-      prompt: task.prompt,
-      ratio: task.ratio,
-      resolution: task.resolution,
-      size: task.size,
-      model: task.model,
-      images: okResults.map((item) => item.image || item.remoteUrl!),
-      imageResultIndexes: okResults.map((item) => item.index),
-      remoteUrls: okResults.map((item) => item.remoteUrl || ''),
-      remoteThumbUrls: okResults.map((item) => item.remoteThumbUrl || ''),
-      failedCount: Math.max(0, task.count - okResults.length),
-      elapsedMs: task.elapsedMs || (task.completedAt ? task.completedAt - task.createdAt : 0),
-    })
-    await refreshHistory()
   }
 
   function validateBeforeGenerate() {
@@ -398,17 +375,6 @@ export default function App() {
     window.setTimeout(() => document.querySelector('.canvas-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
   }
 
-  async function handleDeleteHistory(id: string) {
-    await deleteHistory(id)
-    await refreshHistory()
-  }
-
-  async function handleClearHistory() {
-    if (!confirm('确认清空本地历史记录？')) return
-    await clearHistory()
-    await refreshHistory()
-  }
-
   const size = getImageSize(ratio, resolution)
 
   if (!unlocked) {
@@ -590,7 +556,7 @@ export default function App() {
         <HistoryPanel
           items={history}
           collapsed={historyCollapsed}
-          onToggleCollapsed={() => setHistoryCollapsed((prev) => !prev)}
+          onToggleCollapsed={toggleHistoryCollapsed}
           onReusePrompt={(value) => {
             setPrompt(value)
             showMessage('提示词已复用', 'ok')
