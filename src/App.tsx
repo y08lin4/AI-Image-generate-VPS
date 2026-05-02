@@ -21,6 +21,7 @@ import './styles.css'
 type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
 
 type UploadResult = { index: number; remoteUrl: string; remoteThumbUrl?: string }
+const WORK_LIST_PAGE_SIZE = 20
 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
@@ -191,6 +192,24 @@ export default function App() {
     updateSettings({ ...settings, ...patch })
   }
 
+  function mapWorkCollections(updater: (item: WorkItem) => WorkItem) {
+    setWorks((prev) => prev.map(updater))
+    setMyWorks((prev) => prev.map(updater))
+    setFavoriteWorks((prev) => prev.map(updater))
+    setProfileWorks((prev) => prev.map(updater))
+  }
+
+  function replaceWorkInCollections(target: WorkItem) {
+    mapWorkCollections((item) => (item.id === target.id ? target : item))
+  }
+
+  function removeWorkFromCollections(workId: number) {
+    setWorks((prev) => prev.filter((item) => item.id !== workId))
+    setMyWorks((prev) => prev.filter((item) => item.id !== workId))
+    setFavoriteWorks((prev) => prev.filter((item) => item.id !== workId))
+    setProfileWorks((prev) => prev.filter((item) => item.id !== workId))
+  }
+
   async function handleLogin(username: string, password: string) {
     const accessPassword = settingsRef.current.accessPassword.trim()
     const user = await loginUser(accessPassword, username, password)
@@ -320,7 +339,7 @@ export default function App() {
     }
     setWorksLoading(true)
     try {
-      const data = await listWorksSquare(password, { limit: 20, offset: workOffset, sort: workSort })
+      const data = await listWorksSquare(password, { limit: WORK_LIST_PAGE_SIZE, offset: workOffset, sort: workSort })
       setWorks(data.works)
       setWorkTotal(data.total)
     } catch (error) {
@@ -338,7 +357,7 @@ export default function App() {
     }
     setMyWorksLoading(true)
     try {
-      const data = await listMyWorks(password, { limit: 20, offset: 0, sort: workSort })
+      const data = await listMyWorks(password, { limit: WORK_LIST_PAGE_SIZE, offset: 0, sort: workSort })
       setMyWorks(data.works)
     } catch (error) {
       if (showError) showMessage(error instanceof Error ? error.message : '获取我的作品失败', 'error')
@@ -355,7 +374,7 @@ export default function App() {
     }
     setFavoriteWorksLoading(true)
     try {
-      const data = await listMyFavoriteWorks(password, { limit: 20, offset: 0, sort: workSort })
+      const data = await listMyFavoriteWorks(password, { limit: WORK_LIST_PAGE_SIZE, offset: 0, sort: workSort })
       setFavoriteWorks(data.works)
     } catch (error) {
       if (showError) showMessage(error instanceof Error ? error.message : '获取我的收藏失败', 'error')
@@ -852,8 +871,7 @@ export default function App() {
         thumbUrl: result.remoteThumbUrl || result.remoteUrl,
       })
       showMessage('作品发布成功，已进入广场', 'ok')
-      await refreshWorks()
-      await refreshMyWorks()
+      await Promise.all([refreshWorks(), refreshMyWorks()])
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '发布作品失败', 'error')
     }
@@ -868,19 +886,13 @@ export default function App() {
     const accessPassword = settings.accessPassword.trim()
     const nextLiked = !work.likedByMe
     const nextLikeCount = Math.max(0, work.likeCount + (nextLiked ? 1 : -1))
-    setWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
-    setMyWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
-    setFavoriteWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
-    setProfileWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
+    mapWorkCollections((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item)
 
     try {
       if (nextLiked) await likeWork(accessPassword, work.id)
       else await unlikeWork(accessPassword, work.id)
     } catch (error) {
-      setWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
-      setMyWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
-      setFavoriteWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
-      setProfileWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
+      replaceWorkInCollections(work)
       showMessage(error instanceof Error ? error.message : '点赞操作失败', 'error')
     }
   }
@@ -895,8 +907,7 @@ export default function App() {
     const nextFavoriteCount = Math.max(0, work.favoriteCount + (nextFavorited ? 1 : -1))
 
     const patchItem = (item: WorkItem) => (item.id === work.id ? { ...item, favoritedByMe: nextFavorited, favoriteCount: nextFavoriteCount } : item)
-    setWorks((prev) => prev.map(patchItem))
-    setMyWorks((prev) => prev.map(patchItem))
+    mapWorkCollections(patchItem)
     setFavoriteWorks((prev) => {
       if (nextFavorited) {
         return prev.some((item) => item.id === work.id)
@@ -905,19 +916,13 @@ export default function App() {
       }
       return prev.filter((item) => item.id !== work.id).map(patchItem)
     })
-    setProfileWorks((prev) => prev.map(patchItem))
 
     try {
       if (nextFavorited) await favoriteWork(accessPassword, work.id)
       else await unfavoriteWork(accessPassword, work.id)
     } catch (error) {
-      const rollback = (item: WorkItem) => (item.id === work.id ? work : item)
-      setWorks((prev) => prev.map(rollback))
-      setMyWorks((prev) => prev.map(rollback))
-      setFavoriteWorks((prev) => prev.map(rollback))
-      setProfileWorks((prev) => prev.map(rollback))
-      await refreshWorks()
-      await refreshMyFavorites()
+      replaceWorkInCollections(work)
+      await Promise.all([refreshWorks(), refreshMyFavorites()])
       showMessage(error instanceof Error ? error.message : '收藏操作失败', 'error')
     }
   }
@@ -941,10 +946,7 @@ export default function App() {
       setWorkComments((prev) => [comment, ...prev])
       setWorkCommentsTotal((prev) => prev + 1)
       const updateCommentCount = (item: WorkItem) => item.id === activeCommentWork.id ? { ...item, commentCount: item.commentCount + 1 } : item
-      setWorks((prev) => prev.map(updateCommentCount))
-      setMyWorks((prev) => prev.map(updateCommentCount))
-      setFavoriteWorks((prev) => prev.map(updateCommentCount))
-      setProfileWorks((prev) => prev.map(updateCommentCount))
+      mapWorkCollections(updateCommentCount)
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '发表评论失败', 'error')
     }
@@ -958,10 +960,7 @@ export default function App() {
       setWorkComments((prev) => prev.filter((item) => item.id !== commentId))
       setWorkCommentsTotal((prev) => Math.max(0, prev - 1))
       const updateCommentCount = (item: WorkItem) => item.id === activeCommentWork.id ? { ...item, commentCount: Math.max(0, item.commentCount - 1) } : item
-      setWorks((prev) => prev.map(updateCommentCount))
-      setMyWorks((prev) => prev.map(updateCommentCount))
-      setFavoriteWorks((prev) => prev.map(updateCommentCount))
-      setProfileWorks((prev) => prev.map(updateCommentCount))
+      mapWorkCollections(updateCommentCount)
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '删除评论失败', 'error')
     }
@@ -985,14 +984,9 @@ export default function App() {
     const accessPassword = settings.accessPassword.trim()
     try {
       await deleteWork(accessPassword, work.id)
-      setMyWorks((prev) => prev.filter((item) => item.id !== work.id))
-      setWorks((prev) => prev.filter((item) => item.id !== work.id))
-      setFavoriteWorks((prev) => prev.filter((item) => item.id !== work.id))
-      setProfileWorks((prev) => prev.filter((item) => item.id !== work.id))
+      removeWorkFromCollections(work.id)
       showMessage('作品已删除', 'ok')
-      await refreshWorks()
-      await refreshMyWorks()
-      await refreshMyFavorites()
+      await Promise.all([refreshWorks(), refreshMyWorks(), refreshMyFavorites()])
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '删除作品失败', 'error')
     }
@@ -1008,11 +1002,14 @@ export default function App() {
   }
 
   async function handleRefreshSquare() {
-    await refreshWorks(true)
-    await refreshMyWorks(true)
-    await refreshMyFavorites(true)
-    if (profileUserId) await refreshProfile(profileUserId, true)
-    if (activeCommentWork) await refreshWorkComments(activeCommentWork.id, true)
+    const jobs: Array<Promise<unknown>> = [
+      refreshWorks(true),
+      refreshMyWorks(true),
+      refreshMyFavorites(true),
+    ]
+    if (profileUserId) jobs.push(refreshProfile(profileUserId, true))
+    if (activeCommentWork) jobs.push(refreshWorkComments(activeCommentWork.id, true))
+    await Promise.all(jobs)
   }
 
   async function handleRetryBackgroundTask(taskId: string) {
@@ -1274,7 +1271,7 @@ export default function App() {
             sort={workSort}
             offset={workOffset}
             total={workTotal}
-            pageSize={20}
+            pageSize={WORK_LIST_PAGE_SIZE}
             onRefresh={() => void handleRefreshSquare()}
             onSortChange={handleChangeWorkSort}
             onPageChange={handleChangeWorkPage}
