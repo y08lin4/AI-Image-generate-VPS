@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppSettings, AspectRatio, AuthUser, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier } from './types'
+import type { BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
@@ -12,38 +12,59 @@ import { AuthPanel } from './components/AuthPanel'
 import { WorksSquare } from './components/WorksSquare'
 import { WorkCommentsModal } from './components/WorkCommentsModal'
 import { UserProfileModal } from './components/UserProfileModal'
-import { checkServerPassword, createBackgroundTask, createId, fetchBackgroundTaskImage, getCurrentUser, loginUser, logoutUser, publishWork, registerUser, retryBackgroundTask } from './lib/api'
+import { createBackgroundTask, createId, fetchBackgroundTaskImage, publishWork, retryBackgroundTask } from './lib/api'
 import { type GenerateTaskPayload, getRequestModeLabel, historyItemToGenerationTask, WORK_LIST_PAGE_SIZE } from './lib/appTask'
 import { useBackgroundTasks } from './hooks/useBackgroundTasks'
 import { useGenerationTasks } from './hooks/useGenerationTasks'
+import { useAccessSession } from './hooks/useAccessSession'
+import { useAppSettings } from './hooks/useAppSettings'
 import { useWorksHub } from './hooks/useWorksHub'
 import { addHistory, clearHistory, deleteHistory, getHistory } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
-import { DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
 import './styles.css'
 
 type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
 
 export default function App() {
-  const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const {
+    settings,
+    settingsOpen,
+    ratio,
+    resolution,
+    setSettingsOpen,
+    setRatio,
+    setResolution,
+    updateSettings,
+    patchSettings,
+  } = useAppSettings()
   const [mode, setMode] = useState<Mode>('text-to-image')
   const [prompt, setPrompt] = useState('')
-  const [ratio, setRatio] = useState<AspectRatio>(() => loadSettings().defaultRatio)
-  const [resolution, setResolution] = useState<ResolutionTier>(() => loadSettings().defaultResolution)
   const [inputImages, setInputImages] = useState<InputImage[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
   const [message, setMessage] = useState<Message>(null)
-  const [unlocked, setUnlocked] = useState(false)
-  const [unlocking, setUnlocking] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
-  const [me, setMe] = useState<AuthUser | null>(null)
   const settingsRef = useRef(settings)
   const showMessage = useCallback((text: string, type: 'ok' | 'error' | 'info' = 'info') => {
     setMessage({ text, type })
   }, [])
   const getAccessPassword = useCallback(() => settingsRef.current.accessPassword.trim(), [])
+  const {
+    me,
+    unlocked,
+    unlocking,
+    handleUnlock,
+    handleAccessPasswordUpdated,
+    refreshCurrentUser,
+    handleLogin: loginWithSession,
+    handleRegister: registerWithSession,
+    handleLogout: logoutWithSession,
+  } = useAccessSession({
+    accessPassword: settings.accessPassword,
+    getAccessPassword,
+    showMessage,
+    onAccessPasswordUpdated: (nextPassword) => patchSettings({ accessPassword: nextPassword }),
+  })
   const {
     tasks,
     setTasks,
@@ -114,32 +135,6 @@ export default function App() {
   }, [settings])
 
   useEffect(() => {
-    const savedPassword = settings.accessPassword.trim()
-    if (!savedPassword) {
-      setUnlocked(false)
-      return
-    }
-    let active = true
-    setUnlocking(true)
-    void checkServerPassword(savedPassword)
-      .then((result) => {
-        if (!active) return
-        setUnlocked(result.ok)
-      })
-      .catch(() => {
-        if (!active) return
-        setUnlocked(false)
-      })
-      .finally(() => {
-        if (!active) return
-        setUnlocking(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [settings.accessPassword])
-
-  useEffect(() => {
     void refreshHistory()
   }, [])
 
@@ -150,7 +145,6 @@ export default function App() {
 
   useEffect(() => {
     if (!unlocked) {
-      setMe(null)
       resetForLock()
       return
     }
@@ -176,89 +170,24 @@ export default function App() {
     void refreshProfile(profileUserId)
   }, [unlocked, profileUserId, settings.accessPassword, workSort])
 
-  useEffect(() => {
-    setResolution(settings.defaultResolution)
-    setRatio(normalizeRatioForResolution(settings.defaultRatio, settings.defaultResolution))
-  }, [settings.defaultRatio, settings.defaultResolution])
-
-  async function handleUnlock(accessPassword: string) {
-    const password = accessPassword.trim()
-    if (!password) throw new Error('请输入访问密码')
-    setUnlocking(true)
-    try {
-      const result = await checkServerPassword(password)
-      if (!result.ok) throw new Error(result.message || '访问密码验证失败')
-      patchSettings({ accessPassword: password })
-      setUnlocked(true)
-      return
-    } finally {
-      setUnlocking(false)
-    }
-  }
-
-  function handleAccessPasswordUpdated(nextPassword: string) {
-    patchSettings({ accessPassword: nextPassword.trim() })
-  }
-
-  function patchSettings(patch: Partial<AppSettings>) {
-    updateSettings({ ...settings, ...patch })
-  }
-
   async function handleLogin(username: string, password: string) {
-    const accessPassword = getAccessPassword()
-    const user = await loginUser(accessPassword, username, password)
-    setMe(user)
-    showMessage(`欢迎回来，${user.username}`, 'ok')
+    await loginWithSession(username, password)
     await refreshWorks()
   }
 
   async function handleRegister(username: string, password: string) {
-    const accessPassword = getAccessPassword()
-    const user = await registerUser(accessPassword, username, password)
-    setMe(user)
-    showMessage(`注册成功，欢迎 ${user.username}`, 'ok')
+    await registerWithSession(username, password)
     await refreshWorks()
   }
 
   async function handleLogout() {
-    const accessPassword = getAccessPassword()
-    await logoutUser(accessPassword)
-    setMe(null)
+    await logoutWithSession()
     resetForLock()
-    showMessage('已退出登录', 'ok')
     await refreshWorks()
-  }
-
-  function updateSettings(next: AppSettings) {
-    const normalized = {
-      ...DEFAULT_SETTINGS,
-      ...next,
-      count: Math.max(1, Math.min(12, Math.round(Number(next.count) || DEFAULT_SETTINGS.count))),
-      concurrency: Math.max(1, Math.min(6, Math.round(Number(next.concurrency) || DEFAULT_SETTINGS.concurrency))),
-      timeoutSec: Math.max(10, Math.min(900, Math.round(Number(next.timeoutSec) || DEFAULT_SETTINGS.timeoutSec))),
-      defaultRatio: next.defaultRatio,
-      defaultResolution: next.defaultResolution,
-      autoUploadPixhost: next.autoUploadPixhost === true,
-    }
-    setSettings(normalized)
-    saveSettings(normalized)
   }
 
   async function refreshHistory() {
     setHistory(await getHistory())
-  }
-
-  async function refreshCurrentUser() {
-    const password = getAccessPassword()
-    if (!password) {
-      setMe(null)
-      return
-    }
-    try {
-      setMe(await getCurrentUser(password))
-    } catch {
-      setMe(null)
-    }
   }
 
   async function saveCloudTaskToHistory(task: BackgroundTask) {
