@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import {
   createWorkComment,
   deleteWork,
@@ -15,7 +14,8 @@ import {
   unlikeWork,
 } from '../lib/api'
 import { WORK_LIST_PAGE_SIZE } from '../lib/appTask'
-import type { AuthUser, UserProfile, WorkComment, WorkItem, WorkSort } from '../types'
+import type { AuthUser, WorkItem, WorkSort } from '../types'
+import { useWorksViewState } from './useWorksViewState'
 
 type MessageType = 'ok' | 'error' | 'info'
 
@@ -25,131 +25,158 @@ interface UseWorksHubOptions {
   showMessage: (text: string, type?: MessageType) => void
 }
 
+interface RefreshCollectionOptions<T> {
+  accessPassword: string
+  enabled: boolean
+  onDisabled: () => void
+  setLoading: (loading: boolean) => void
+  fetcher: (accessPassword: string) => Promise<T>
+  onSuccess: (data: T) => void
+  showError: boolean
+  onError: (error: unknown) => void
+}
+
+async function refreshCollection<T>({
+  accessPassword,
+  enabled,
+  onDisabled,
+  setLoading,
+  fetcher,
+  onSuccess,
+  showError,
+  onError,
+}: RefreshCollectionOptions<T>) {
+  if (!enabled) {
+    onDisabled()
+    return
+  }
+
+  setLoading(true)
+  try {
+    const data = await fetcher(accessPassword)
+    onSuccess(data)
+  } catch (error) {
+    if (showError) onError(error)
+  } finally {
+    setLoading(false)
+  }
+}
+
 export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubOptions) {
-  const [works, setWorks] = useState<WorkItem[]>([])
-  const [worksLoading, setWorksLoading] = useState(false)
-  const [workSort, setWorkSort] = useState<WorkSort>('latest')
-  const [workOffset, setWorkOffset] = useState(0)
-  const [workTotal, setWorkTotal] = useState(0)
-  const [myWorks, setMyWorks] = useState<WorkItem[]>([])
-  const [myWorksLoading, setMyWorksLoading] = useState(false)
-  const [favoriteWorks, setFavoriteWorks] = useState<WorkItem[]>([])
-  const [favoriteWorksLoading, setFavoriteWorksLoading] = useState(false)
-  const [activeCommentWork, setActiveCommentWork] = useState<WorkItem | null>(null)
-  const [workComments, setWorkComments] = useState<WorkComment[]>([])
-  const [workCommentsLoading, setWorkCommentsLoading] = useState(false)
-  const [workCommentsTotal, setWorkCommentsTotal] = useState(0)
-  const [profileUserId, setProfileUserId] = useState<number | null>(null)
-  const [profileData, setProfileData] = useState<UserProfile | null>(null)
-  const [profileWorks, setProfileWorks] = useState<WorkItem[]>([])
-  const [profileLoading, setProfileLoading] = useState(false)
-
-  function mapWorkCollections(updater: (item: WorkItem) => WorkItem) {
-    setWorks((prev) => prev.map(updater))
-    setMyWorks((prev) => prev.map(updater))
-    setFavoriteWorks((prev) => prev.map(updater))
-    setProfileWorks((prev) => prev.map(updater))
-  }
-
-  function replaceWorkInCollections(target: WorkItem) {
-    mapWorkCollections((item) => (item.id === target.id ? target : item))
-  }
-
-  function removeWorkFromCollections(workId: number) {
-    setWorks((prev) => prev.filter((item) => item.id !== workId))
-    setMyWorks((prev) => prev.filter((item) => item.id !== workId))
-    setFavoriteWorks((prev) => prev.filter((item) => item.id !== workId))
-    setProfileWorks((prev) => prev.filter((item) => item.id !== workId))
-  }
-
-  function resetForLock() {
-    setWorks([])
-    setMyWorks([])
-    setFavoriteWorks([])
-    setWorkOffset(0)
-    setWorkTotal(0)
-    setActiveCommentWork(null)
-    setWorkComments([])
-    setWorkCommentsTotal(0)
-    setProfileUserId(null)
-    setProfileData(null)
-    setProfileWorks([])
-  }
-
-  function resetForNoUser() {
-    setMyWorks([])
-    setFavoriteWorks([])
-  }
-
-  function closeComments() {
-    setActiveCommentWork(null)
-  }
-
-  function closeProfile() {
-    setProfileUserId(null)
-    setProfileData(null)
-    setProfileWorks([])
-  }
+  const {
+    works,
+    setWorks,
+    worksLoading,
+    setWorksLoading,
+    workSort,
+    setWorkSort,
+    workOffset,
+    setWorkOffset,
+    workTotal,
+    setWorkTotal,
+    myWorks,
+    setMyWorks,
+    myWorksLoading,
+    setMyWorksLoading,
+    favoriteWorks,
+    setFavoriteWorks,
+    favoriteWorksLoading,
+    setFavoriteWorksLoading,
+    activeCommentWork,
+    setActiveCommentWork,
+    workComments,
+    setWorkComments,
+    workCommentsLoading,
+    setWorkCommentsLoading,
+    workCommentsTotal,
+    setWorkCommentsTotal,
+    profileUserId,
+    profileData,
+    setProfileData,
+    profileWorks,
+    setProfileWorks,
+    profileLoading,
+    setProfileLoading,
+    mapWorkCollections,
+    replaceWorkInCollections,
+    removeWorkFromCollections,
+    resetForLock,
+    resetForNoUser,
+    closeComments,
+    closeProfile,
+    handleOpenUserProfile,
+  } = useWorksViewState()
 
   async function refreshWorks(showError = false) {
-    const password = getAccessPassword()
-    if (!password) {
-      setWorks([])
-      setWorkTotal(0)
-      return
-    }
-    setWorksLoading(true)
-    try {
-      const data = await listWorksSquare(password, { limit: WORK_LIST_PAGE_SIZE, offset: workOffset, sort: workSort })
-      setWorks(data.works)
-      setWorkTotal(data.total)
-    } catch (error) {
-      if (showError) showMessage(error instanceof Error ? error.message : '获取作品广场失败', 'error')
-    } finally {
-      setWorksLoading(false)
-    }
+    const accessPassword = getAccessPassword()
+    await refreshCollection({
+      accessPassword,
+      enabled: Boolean(accessPassword),
+      onDisabled: () => {
+        setWorks([])
+        setWorkTotal(0)
+      },
+      setLoading: setWorksLoading,
+      fetcher: (password) =>
+        listWorksSquare(password, {
+          limit: WORK_LIST_PAGE_SIZE,
+          offset: workOffset,
+          sort: workSort,
+        }),
+      onSuccess: (data) => {
+        setWorks(data.works)
+        setWorkTotal(data.total)
+      },
+      showError,
+      onError: (error) => showMessage(error instanceof Error ? error.message : '获取作品广场失败', 'error'),
+    })
   }
 
   async function refreshMyWorks(showError = false) {
-    const password = getAccessPassword()
-    if (!password || !me) {
-      setMyWorks([])
-      return
-    }
-    setMyWorksLoading(true)
-    try {
-      const data = await listMyWorks(password, { limit: WORK_LIST_PAGE_SIZE, offset: 0, sort: workSort })
-      setMyWorks(data.works)
-    } catch (error) {
-      if (showError) showMessage(error instanceof Error ? error.message : '获取我的作品失败', 'error')
-    } finally {
-      setMyWorksLoading(false)
-    }
+    const accessPassword = getAccessPassword()
+    await refreshCollection({
+      accessPassword,
+      enabled: Boolean(accessPassword && me),
+      onDisabled: () => setMyWorks([]),
+      setLoading: setMyWorksLoading,
+      fetcher: (password) =>
+        listMyWorks(password, {
+          limit: WORK_LIST_PAGE_SIZE,
+          offset: 0,
+          sort: workSort,
+        }),
+      onSuccess: (data) => setMyWorks(data.works),
+      showError,
+      onError: (error) => showMessage(error instanceof Error ? error.message : '获取我的作品失败', 'error'),
+    })
   }
 
   async function refreshMyFavorites(showError = false) {
-    const password = getAccessPassword()
-    if (!password || !me) {
-      setFavoriteWorks([])
-      return
-    }
-    setFavoriteWorksLoading(true)
-    try {
-      const data = await listMyFavoriteWorks(password, { limit: WORK_LIST_PAGE_SIZE, offset: 0, sort: workSort })
-      setFavoriteWorks(data.works)
-    } catch (error) {
-      if (showError) showMessage(error instanceof Error ? error.message : '获取我的收藏失败', 'error')
-    } finally {
-      setFavoriteWorksLoading(false)
-    }
+    const accessPassword = getAccessPassword()
+    await refreshCollection({
+      accessPassword,
+      enabled: Boolean(accessPassword && me),
+      onDisabled: () => setFavoriteWorks([]),
+      setLoading: setFavoriteWorksLoading,
+      fetcher: (password) =>
+        listMyFavoriteWorks(password, {
+          limit: WORK_LIST_PAGE_SIZE,
+          offset: 0,
+          sort: workSort,
+        }),
+      onSuccess: (data) => setFavoriteWorks(data.works),
+      showError,
+      onError: (error) => showMessage(error instanceof Error ? error.message : '获取我的收藏失败', 'error'),
+    })
   }
 
   async function refreshWorkComments(workId: number, showError = false) {
-    const password = getAccessPassword()
-    if (!password) return
+    const accessPassword = getAccessPassword()
+    if (!accessPassword) return
+
     setWorkCommentsLoading(true)
     try {
-      const data = await listWorkComments(password, workId, { limit: 50, offset: 0 })
+      const data = await listWorkComments(accessPassword, workId, { limit: 50, offset: 0 })
       setWorkComments(data.comments)
       setWorkCommentsTotal(data.total)
     } catch (error) {
@@ -160,13 +187,14 @@ export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubO
   }
 
   async function refreshProfile(userId: number, showError = false) {
-    const password = getAccessPassword()
-    if (!password) return
+    const accessPassword = getAccessPassword()
+    if (!accessPassword) return
+
     setProfileLoading(true)
     try {
       const [profile, worksRes] = await Promise.all([
-        getUserProfileById(password, userId),
-        listUserWorksById(password, userId, { limit: 30, offset: 0, sort: workSort }),
+        getUserProfileById(accessPassword, userId),
+        listUserWorksById(accessPassword, userId, { limit: 30, offset: 0, sort: workSort }),
       ])
       setProfileData(profile)
       setProfileWorks(worksRes.works)
@@ -182,10 +210,16 @@ export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubO
       showMessage('请先登录后再点赞', 'error')
       return
     }
+
     const accessPassword = getAccessPassword()
     const nextLiked = !work.likedByMe
     const nextLikeCount = Math.max(0, work.likeCount + (nextLiked ? 1 : -1))
-    mapWorkCollections((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item)
+
+    mapWorkCollections((item) =>
+      item.id === work.id
+        ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount }
+        : item,
+    )
 
     try {
       if (nextLiked) await likeWork(accessPassword, work.id)
@@ -201,10 +235,14 @@ export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubO
       showMessage('请先登录后再收藏', 'error')
       return
     }
+
     const accessPassword = getAccessPassword()
     const nextFavorited = !work.favoritedByMe
     const nextFavoriteCount = Math.max(0, work.favoriteCount + (nextFavorited ? 1 : -1))
-    const patchItem = (item: WorkItem) => (item.id === work.id ? { ...item, favoritedByMe: nextFavorited, favoriteCount: nextFavoriteCount } : item)
+    const patchItem = (item: WorkItem) =>
+      item.id === work.id
+        ? { ...item, favoritedByMe: nextFavorited, favoriteCount: nextFavoriteCount }
+        : item
 
     mapWorkCollections(patchItem)
     setFavoriteWorks((prev) => {
@@ -239,12 +277,16 @@ export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubO
       showMessage('请先登录后再评论', 'error')
       return
     }
+
     const accessPassword = getAccessPassword()
     try {
       const comment = await createWorkComment(accessPassword, activeCommentWork.id, content)
       setWorkComments((prev) => [comment, ...prev])
       setWorkCommentsTotal((prev) => prev + 1)
-      const updateCommentCount = (item: WorkItem) => item.id === activeCommentWork.id ? { ...item, commentCount: item.commentCount + 1 } : item
+      const updateCommentCount = (item: WorkItem) =>
+        item.id === activeCommentWork.id
+          ? { ...item, commentCount: item.commentCount + 1 }
+          : item
       mapWorkCollections(updateCommentCount)
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '发表评论失败', 'error')
@@ -253,20 +295,20 @@ export function useWorksHub({ me, getAccessPassword, showMessage }: UseWorksHubO
 
   async function handleDeleteComment(commentId: number) {
     if (!activeCommentWork) return
+
     const accessPassword = getAccessPassword()
     try {
       await deleteWorkComment(accessPassword, commentId)
       setWorkComments((prev) => prev.filter((item) => item.id !== commentId))
       setWorkCommentsTotal((prev) => Math.max(0, prev - 1))
-      const updateCommentCount = (item: WorkItem) => item.id === activeCommentWork.id ? { ...item, commentCount: Math.max(0, item.commentCount - 1) } : item
+      const updateCommentCount = (item: WorkItem) =>
+        item.id === activeCommentWork.id
+          ? { ...item, commentCount: Math.max(0, item.commentCount - 1) }
+          : item
       mapWorkCollections(updateCommentCount)
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '删除评论失败', 'error')
     }
-  }
-
-  function handleOpenUserProfile(userId: number) {
-    setProfileUserId(userId)
   }
 
   async function handleDeleteMyWork(work: WorkItem) {
