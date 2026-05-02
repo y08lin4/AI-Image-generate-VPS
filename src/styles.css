@@ -319,6 +319,33 @@ code { font-size: .85em; }
 .works-square-head small {
   color: var(--muted);
 }
+.works-square-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.works-sort-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.works-sort-tabs button {
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.works-sort-tabs button.active {
+  background: #111827;
+  color: #fff;
+}
 .works-square-empty {
   border: 1px dashed var(--border);
   border-radius: 12px;
@@ -368,7 +395,22 @@ code { font-size: .85em; }
   color: var(--muted-2);
   font-size: 11px;
 }
+.work-status-tag {
+  display: inline-block;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9a3412;
+  background: #ffedd5;
+}
+.work-card-actions {
+  display: flex;
+  gap: 8px;
+}
 .work-like-btn {
+  flex: 1;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: #fff;
@@ -381,6 +423,38 @@ code { font-size: .85em; }
   color: #be123c;
   border-color: #fecdd3;
   background: #fff1f2;
+}
+.work-delete-btn {
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff;
+  color: #b91c1c;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.works-page-bar {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.my-works-section {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.my-works-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.my-works-head h4 {
+  margin: 0;
+  font-size: 14px;
 }
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 520px; border: 1px dashed var(--border); border-radius: 18px; background: linear-gradient(180deg, #fff, #f8fafc); color: var(--muted); }
 .empty-card { padding: 24px 34px; border: 1px solid var(--border); border-radius: 999px; background: white; }
@@ -820,6 +894,8 @@ code { font-size: .85em; }
   .config-pill { align-items: flex-start; }
   .task-header { flex-direction: column; }
   .task-meta { align-items: flex-start; white-space: normal; }
+  .works-square-head { flex-direction: column; align-items: flex-start; }
+  .works-square-head-actions { width: 100%; justify-content: space-between; }
 }
 
 @media (max-width: 820px), (hover: none), (pointer: coarse) {

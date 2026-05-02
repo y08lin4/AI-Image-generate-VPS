@@ -115,6 +115,10 @@ export interface AuthUser {
   createdAt: number
 }
 
+export type WorkStatus = 'active' | 'hidden'
+
+export type WorkSort = 'latest' | 'hot'
+
 export interface WorkItem {
   id: number
   userId: number
@@ -123,6 +127,7 @@ export interface WorkItem {
   prompt: string
   imageUrl: string
   thumbUrl?: string
+  status: WorkStatus
   createdAt: number
   likeCount: number
   likedByMe: boolean

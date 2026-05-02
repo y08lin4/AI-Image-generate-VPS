@@ -11,6 +11,8 @@ type BackgroundTaskStatus = 'queued' | 'running' | 'uploading' | 'completed' | '
 type Ratio = '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9'
 type AspectRatio = 'auto' | Ratio
 type ResolutionTier = 'auto' | 'standard' | '2k' | '4k'
+type WorkStatus = 'active' | 'hidden'
+type WorkSort = 'latest' | 'hot'
 
 interface InputImagePayload {
   name?: string
@@ -198,13 +200,9 @@ interface WorkListRow {
   image_url: string
   thumb_url: string | null
   created_at: number
+  status: WorkStatus
   like_count: number
   liked_by_me: number
-}
-
-interface WorkDetailRow extends WorkListRow {
-  works_count: number
-  likes_received: number
 }
 
 interface UserProfileRow {
@@ -322,6 +320,30 @@ app.post('/api/admin/access-password', (req, res) => {
   return json(res, { ok: true, message: '访问密码已更新' })
 })
 
+app.post('/api/admin/works/:id/hide', (req, res) => {
+  const adminError = requireAdminPassword(req, config)
+  if (adminError) return jsonError(res, adminError.type, adminError.message, adminError.status)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  if (!workExists(db, workId)) return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  updateWorkStatus(db, workId, 'hidden')
+  return json(res, { ok: true, message: '作品已下架' })
+})
+
+app.post('/api/admin/works/:id/restore', (req, res) => {
+  const adminError = requireAdminPassword(req, config)
+  if (adminError) return jsonError(res, adminError.type, adminError.message, adminError.status)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  if (!workExists(db, workId)) return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  updateWorkStatus(db, workId, 'active')
+  return json(res, { ok: true, message: '作品已恢复上架' })
+})
+
 app.post('/api/auth/register', (req, res) => {
   const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
@@ -386,6 +408,21 @@ app.get('/api/auth/me', (req, res) => {
   return json(res, { ok: true, user })
 })
 
+app.get('/api/my/works', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const limit = clamp(Number(req.query.limit), 1, 100, 20)
+  const offset = clamp(Number(req.query.offset), 0, 200000, 0)
+  const sort = parseWorkSort(req.query.sort)
+  const works = listWorksByUser(db, me.id, limit, offset, me.id, true, sort)
+  const total = countWorksByUser(db, me.id, true)
+  return json(res, { ok: true, works, total, limit, offset, sort })
+})
+
 app.post('/api/works', (req, res) => {
   const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
@@ -409,9 +446,10 @@ app.get('/api/works', (req, res) => {
   const me = getOptionalUserFromRequest(db, req)
   const limit = clamp(Number(req.query.limit), 1, 100, 20)
   const offset = clamp(Number(req.query.offset), 0, 200000, 0)
-  const works = listWorks(db, limit, offset, me?.id)
+  const sort = parseWorkSort(req.query.sort)
+  const works = listWorks(db, limit, offset, me?.id, sort)
   const total = countWorks(db)
-  return json(res, { ok: true, works, total, limit, offset })
+  return json(res, { ok: true, works, total, limit, offset, sort })
 })
 
 app.get('/api/works/:id', (req, res) => {
@@ -424,7 +462,25 @@ app.get('/api/works/:id', (req, res) => {
 
   const work = getWorkById(db, workId, me?.id)
   if (!work) return jsonError(res, 'bad_request', '作品不存在', 404)
+  if (work.status === 'hidden' && me?.id !== work.userId) return jsonError(res, 'bad_request', '作品不存在', 404)
   return json(res, { ok: true, work })
+})
+
+app.delete('/api/works/:id', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  const work = getWorkById(db, workId, me.id)
+  if (!work) return jsonError(res, 'bad_request', '作品不存在', 404)
+  if (work.userId !== me.id) return jsonError(res, 'auth_error', '仅作者可删除作品', 403)
+
+  deleteWorkById(db, workId)
+  return json(res, { ok: true })
 })
 
 app.post('/api/works/:id/like', (req, res) => {
@@ -436,7 +492,8 @@ app.post('/api/works/:id/like', (req, res) => {
 
   const workId = Number(req.params.id)
   if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
-  if (!workExists(db, workId)) return jsonError(res, 'bad_request', '作品不存在', 404)
+  const work = getWorkById(db, workId, me.id)
+  if (!work || work.status !== 'active') return jsonError(res, 'bad_request', '作品不存在', 404)
 
   addWorkLike(db, workId, me.id)
   return json(res, { ok: true })
@@ -477,8 +534,11 @@ app.get('/api/users/:id/works', (req, res) => {
 
   const limit = clamp(Number(req.query.limit), 1, 100, 20)
   const offset = clamp(Number(req.query.offset), 0, 200000, 0)
-  const works = listWorksByUser(db, userId, limit, offset, me?.id)
-  return json(res, { ok: true, works, limit, offset })
+  const includeHidden = Boolean(me && me.id === userId)
+  const sort = parseWorkSort(req.query.sort)
+  const works = listWorksByUser(db, userId, limit, offset, me?.id, includeHidden, sort)
+  const total = countWorksByUser(db, userId, includeHidden)
+  return json(res, { ok: true, works, total, limit, offset, sort })
 })
 
 app.post('/api/generate-stream', async (req, res) => {
@@ -1146,11 +1206,19 @@ function isValidWorkImageUrl(value: string) {
   return /^https?:\/\//i.test(value)
 }
 
+function parseWorkSort(value: unknown): WorkSort {
+  return value === 'hot' ? 'hot' : 'latest'
+}
+
+function getWorkOrderBy(sort: WorkSort) {
+  return sort === 'hot' ? 'like_count DESC, w.created_at DESC' : 'w.created_at DESC'
+}
+
 function createWork(database: DatabaseSync, userId: number, payload: { title: string; prompt: string; imageUrl: string; thumbUrl?: string }) {
   const now = Date.now()
   const result = database
-    .prepare('INSERT INTO works (user_id, title, prompt, image_url, thumb_url, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(userId, payload.title, payload.prompt, payload.imageUrl, payload.thumbUrl || null, now) as { lastInsertRowid: number | bigint }
+    .prepare('INSERT INTO works (user_id, title, prompt, image_url, thumb_url, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, payload.title, payload.prompt, payload.imageUrl, payload.thumbUrl || null, 'active', now) as { lastInsertRowid: number | bigint }
   const workId = Number(result.lastInsertRowid)
   return getWorkById(database, workId, userId)
 }
@@ -1164,6 +1232,7 @@ function mapWorkRow(row: WorkListRow) {
     prompt: row.prompt,
     imageUrl: row.image_url,
     thumbUrl: row.thumb_url || undefined,
+    status: row.status === 'hidden' ? 'hidden' : 'active',
     createdAt: Number(row.created_at),
     likeCount: Number(row.like_count || 0),
     likedByMe: Number(row.liked_by_me || 0) > 0,
@@ -1171,11 +1240,18 @@ function mapWorkRow(row: WorkListRow) {
 }
 
 function countWorks(database: DatabaseSync) {
-  const row = database.prepare('SELECT COUNT(*) as total FROM works').get() as { total: number }
+  const row = database.prepare('SELECT COUNT(*) as total FROM works WHERE status = ?').get('active') as { total: number }
   return Number(row?.total || 0)
 }
 
-function listWorks(database: DatabaseSync, limit: number, offset: number, viewerUserId?: number) {
+function countWorksByUser(database: DatabaseSync, userId: number, includeHidden = false) {
+  const row = includeHidden
+    ? database.prepare('SELECT COUNT(*) as total FROM works WHERE user_id = ?').get(userId) as { total: number }
+    : database.prepare('SELECT COUNT(*) as total FROM works WHERE user_id = ? AND status = ?').get(userId, 'active') as { total: number }
+  return Number(row?.total || 0)
+}
+
+function listWorks(database: DatabaseSync, limit: number, offset: number, viewerUserId?: number, sort: WorkSort = 'latest') {
   const viewerId = Number(viewerUserId || 0)
   const rows = database.prepare(`SELECT
       w.id,
@@ -1185,18 +1261,29 @@ function listWorks(database: DatabaseSync, limit: number, offset: number, viewer
       w.prompt,
       w.image_url,
       w.thumb_url,
+      w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
     FROM works w
     JOIN users u ON u.id = w.user_id
-    ORDER BY w.created_at DESC
+    WHERE w.status = 'active'
+    ORDER BY ${getWorkOrderBy(sort)}
     LIMIT ? OFFSET ?`).all(viewerId, limit, offset) as unknown as WorkListRow[]
   return rows.map(mapWorkRow)
 }
 
-function listWorksByUser(database: DatabaseSync, userId: number, limit: number, offset: number, viewerUserId?: number) {
+function listWorksByUser(
+  database: DatabaseSync,
+  userId: number,
+  limit: number,
+  offset: number,
+  viewerUserId?: number,
+  includeHidden = false,
+  sort: WorkSort = 'latest',
+) {
   const viewerId = Number(viewerUserId || 0)
+  const whereStatus = includeHidden ? '' : "AND w.status = 'active'"
   const rows = database.prepare(`SELECT
       w.id,
       w.user_id,
@@ -1205,13 +1292,15 @@ function listWorksByUser(database: DatabaseSync, userId: number, limit: number, 
       w.prompt,
       w.image_url,
       w.thumb_url,
+      w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
     FROM works w
     JOIN users u ON u.id = w.user_id
     WHERE w.user_id = ?
-    ORDER BY w.created_at DESC
+    ${whereStatus}
+    ORDER BY ${getWorkOrderBy(sort)}
     LIMIT ? OFFSET ?`).all(viewerId, userId, limit, offset) as unknown as WorkListRow[]
   return rows.map(mapWorkRow)
 }
@@ -1226,6 +1315,7 @@ function getWorkById(database: DatabaseSync, workId: number, viewerUserId?: numb
       w.prompt,
       w.image_url,
       w.thumb_url,
+      w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
@@ -1239,6 +1329,14 @@ function getWorkById(database: DatabaseSync, workId: number, viewerUserId?: numb
 function workExists(database: DatabaseSync, workId: number) {
   const row = database.prepare('SELECT 1 as yes FROM works WHERE id = ?').get(workId) as { yes: number } | undefined
   return Boolean(row?.yes)
+}
+
+function deleteWorkById(database: DatabaseSync, workId: number) {
+  database.prepare('DELETE FROM works WHERE id = ?').run(workId)
+}
+
+function updateWorkStatus(database: DatabaseSync, workId: number, status: WorkStatus) {
+  database.prepare('UPDATE works SET status = ? WHERE id = ?').run(status, workId)
 }
 
 function addWorkLike(database: DatabaseSync, workId: number, userId: number) {
@@ -1259,8 +1357,8 @@ function getUserProfile(database: DatabaseSync, userId: number) {
       u.id,
       u.username,
       u.created_at,
-      (SELECT COUNT(*) FROM works w WHERE w.user_id = u.id) AS works_count,
-      (SELECT COUNT(*) FROM work_likes wl JOIN works w2 ON w2.id = wl.work_id WHERE w2.user_id = u.id) AS likes_received
+      (SELECT COUNT(*) FROM works w WHERE w.user_id = u.id AND w.status = 'active') AS works_count,
+      (SELECT COUNT(*) FROM work_likes wl JOIN works w2 ON w2.id = wl.work_id WHERE w2.user_id = u.id AND w2.status = 'active') AS likes_received
     FROM users u
     WHERE u.id = ?`).get(userId) as UserProfileRow | undefined
 
@@ -1809,6 +1907,7 @@ function setupSchema(database: DatabaseSync) {
       prompt TEXT NOT NULL,
       image_url TEXT NOT NULL,
       thumb_url TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
@@ -1826,6 +1925,15 @@ function setupSchema(database: DatabaseSync) {
   ]
 
   for (const statement of statements) database.prepare(statement).run()
+  ensureColumnExists(database, 'works', 'status', "TEXT NOT NULL DEFAULT 'active'")
+  database.prepare('CREATE INDEX IF NOT EXISTS idx_works_status_created_at ON works(status, created_at DESC)').run()
+}
+
+function ensureColumnExists(database: DatabaseSync, tableName: string, columnName: string, columnSql: string) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>
+  const exists = columns.some((column) => String(column?.name || '') === columnName)
+  if (exists) return
+  database.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnSql}`).run()
 }
 
 function insertTask(

@@ -12,6 +12,7 @@ import type {
   StreamEvent,
   UserProfile,
   WorkItem,
+  WorkSort,
 } from '../types'
 import { getImageSize } from './ratios'
 
@@ -297,13 +298,14 @@ export async function publishWork(
 
 export async function listWorks(
   accessPassword: string,
-  options?: { limit?: number; offset?: number },
-): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number }> {
+  options?: { limit?: number; offset?: number; sort?: WorkSort },
+): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number; sort: WorkSort }> {
   const params = new URLSearchParams()
   if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
   if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  if (options?.sort) params.set('sort', options.sort)
   const query = params.toString()
-  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; message?: string }>(
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; sort?: WorkSort; message?: string }>(
     `/api/works${query ? `?${query}` : ''}`,
     accessPassword,
   )
@@ -313,6 +315,7 @@ export async function listWorks(
     total: Number(data.total || 0),
     limit: Number(data.limit || options?.limit || 20),
     offset: Number(data.offset || options?.offset || 0),
+    sort: data.sort === 'hot' ? 'hot' : 'latest',
   }
 }
 
@@ -342,6 +345,37 @@ export async function unlikeWork(accessPassword: string, workId: number): Promis
   if (!data.ok) throw new Error(data.message || '取消点赞失败')
 }
 
+export async function deleteWork(accessPassword: string, workId: number): Promise<void> {
+  const data = await deleteJson<{ ok?: boolean; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}`,
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '删除作品失败')
+}
+
+export async function listMyWorks(
+  accessPassword: string,
+  options?: { limit?: number; offset?: number; sort?: WorkSort },
+): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number; sort: WorkSort }> {
+  const params = new URLSearchParams()
+  if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
+  if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  if (options?.sort) params.set('sort', options.sort)
+  const query = params.toString()
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; sort?: WorkSort; message?: string }>(
+    `/api/my/works${query ? `?${query}` : ''}`,
+    accessPassword,
+  )
+  if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取我的作品失败')
+  return {
+    works: data.works,
+    total: Number(data.total || 0),
+    limit: Number(data.limit || options?.limit || 20),
+    offset: Number(data.offset || options?.offset || 0),
+    sort: data.sort === 'hot' ? 'hot' : 'latest',
+  }
+}
+
 export async function getUserProfileById(accessPassword: string, userId: number): Promise<UserProfile> {
   const data = await getJson<{ ok?: boolean; user?: UserProfile; message?: string }>(
     `/api/users/${encodeURIComponent(String(userId))}`,
@@ -354,18 +388,45 @@ export async function getUserProfileById(accessPassword: string, userId: number)
 export async function listUserWorksById(
   accessPassword: string,
   userId: number,
-  options?: { limit?: number; offset?: number },
-): Promise<WorkItem[]> {
+  options?: { limit?: number; offset?: number; sort?: WorkSort },
+): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number; sort: WorkSort }> {
   const params = new URLSearchParams()
   if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
   if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  if (options?.sort) params.set('sort', options.sort)
   const query = params.toString()
-  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; message?: string }>(
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; sort?: WorkSort; message?: string }>(
     `/api/users/${encodeURIComponent(String(userId))}/works${query ? `?${query}` : ''}`,
     accessPassword,
   )
   if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取用户作品失败')
-  return data.works
+  return {
+    works: data.works,
+    total: Number(data.total || 0),
+    limit: Number(data.limit || options?.limit || 20),
+    offset: Number(data.offset || options?.offset || 0),
+    sort: data.sort === 'hot' ? 'hot' : 'latest',
+  }
+}
+
+export async function hideWorkByAdmin(adminPassword: string, workId: number): Promise<{ ok: true; message: string }> {
+  const data = await adminPostJson<{ ok?: boolean; message?: string }>(
+    `/api/admin/works/${encodeURIComponent(String(workId))}/hide`,
+    {},
+    adminPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '下架作品失败')
+  return { ok: true, message: data.message || '作品已下架' }
+}
+
+export async function restoreWorkByAdmin(adminPassword: string, workId: number): Promise<{ ok: true; message: string }> {
+  const data = await adminPostJson<{ ok?: boolean; message?: string }>(
+    `/api/admin/works/${encodeURIComponent(String(workId))}/restore`,
+    {},
+    adminPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '恢复作品失败')
+  return { ok: true, message: data.message || '作品已恢复上架' }
 }
 
 
@@ -376,8 +437,8 @@ export async function verifyAdminPassword(adminPassword: string): Promise<{ ok: 
     { adminPassword },
     adminPassword,
   )
-  if (!data.ok) throw new Error(data.message || '???????')
-  return { ok: true, message: data.message || '???????' }
+  if (!data.ok) throw new Error(data.message || '管理员验证失败')
+  return { ok: true, message: data.message || '管理员验证通过' }
 }
 
 export async function getAdminDailyReport(adminPassword: string, date?: string): Promise<AdminDailyReport> {
@@ -386,7 +447,7 @@ export async function getAdminDailyReport(adminPassword: string, date?: string):
     `/api/admin/daily-report${query}`,
     adminPassword,
   )
-  if (!data.ok || !data.report) throw new Error(data.message || '??????')
+  if (!data.ok || !data.report) throw new Error(data.message || '获取日报失败')
   return data.report
 }
 
@@ -396,8 +457,8 @@ export async function updateAccessPasswordByAdmin(adminPassword: string, newPass
     { newPassword },
     adminPassword,
   )
-  if (!data.ok) throw new Error(data.message || '????????')
-  return { ok: true, message: data.message || '???????' }
+  if (!data.ok) throw new Error(data.message || '更新访问密码失败')
+  return { ok: true, message: data.message || '访问密码已更新' }
 }
 export async function uploadImageToPixhost(
   dataUrl: string,

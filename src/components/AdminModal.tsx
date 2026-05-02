@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AdminDailyReport } from '../types'
-import { getAdminDailyReport, updateAccessPasswordByAdmin, verifyAdminPassword } from '../lib/api'
+import { getAdminDailyReport, hideWorkByAdmin, restoreWorkByAdmin, updateAccessPasswordByAdmin, verifyAdminPassword } from '../lib/api'
 
 interface Props {
   open: boolean
@@ -17,12 +17,15 @@ export function AdminModal({ open, onClose, onMessage, onAccessPasswordUpdated }
   const [report, setReport] = useState<AdminDailyReport | null>(null)
   const [newAccessPassword, setNewAccessPassword] = useState('')
   const [updatingPassword, setUpdatingPassword] = useState(false)
+  const [targetWorkId, setTargetWorkId] = useState('')
+  const [moderating, setModerating] = useState(false)
 
   useEffect(() => {
     if (!open) return
     setVerified(false)
     setReport(null)
     setNewAccessPassword('')
+    setTargetWorkId('')
   }, [open])
 
   if (!open) return null
@@ -84,13 +87,37 @@ export function AdminModal({ open, onClose, onMessage, onAccessPasswordUpdated }
     }
   }
 
+  async function handleModerate(action: 'hide' | 'restore') {
+    const password = adminPassword.trim()
+    const workId = Number(targetWorkId)
+    if (!password) {
+      onMessage('请先输入管理员密码', 'error')
+      return
+    }
+    if (!Number.isInteger(workId) || workId <= 0) {
+      onMessage('请输入有效作品 ID', 'error')
+      return
+    }
+    setModerating(true)
+    try {
+      const result = action === 'hide'
+        ? await hideWorkByAdmin(password, workId)
+        : await restoreWorkByAdmin(password, workId)
+      onMessage(result.message, 'ok')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '作品审核操作失败', 'error')
+    } finally {
+      setModerating(false)
+    }
+  }
+
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <section className="settings-modal admin-modal" role="dialog" aria-modal="true" aria-label="管理员面板">
         <header className="modal-header">
           <div>
             <h2>管理员面板</h2>
-            <p>可修改访问密码并查看今日生成统计。</p>
+            <p>支持访问密码管理、日报查看与作品审核。</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose}>×</button>
         </header>
@@ -106,7 +133,7 @@ export function AdminModal({ open, onClose, onMessage, onAccessPasswordUpdated }
                 onChange={(e) => setAdminPassword(e.target.value)}
               />
               <button type="button" className="secondary-btn" disabled={verifying} onClick={() => void handleVerify()}>
-                {verifying ? '验证中' : '验证'}
+                {verifying ? '验证中...' : '验证'}
               </button>
             </div>
           </label>
@@ -165,6 +192,35 @@ export function AdminModal({ open, onClose, onMessage, onAccessPasswordUpdated }
                     onClick={() => void handleChangeAccessPassword()}
                   >
                     {updatingPassword ? '修改中...' : '修改'}
+                  </button>
+                </div>
+              </label>
+
+              <label className="field full">
+                <span>作品审核（按作品 ID）</span>
+                <div className="inline-input">
+                  <input
+                    type="number"
+                    min={1}
+                    value={targetWorkId}
+                    placeholder="输入作品 ID"
+                    onChange={(e) => setTargetWorkId(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    disabled={moderating}
+                    onClick={() => void handleModerate('hide')}
+                  >
+                    {moderating ? '处理中...' : '下架'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    disabled={moderating}
+                    onClick={() => void handleModerate('restore')}
+                  >
+                    {moderating ? '处理中...' : '恢复'}
                   </button>
                 </div>
               </label>

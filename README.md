@@ -31,11 +31,20 @@
 ## 新增能力（本次）
 
 - **访问门禁**：进入页面前必须输入访问密码（`ACCESS_PASSWORD`）
+- **用户系统**：
+  - 用户注册 / 登录 / 退出（Cookie 会话）
+  - 用户可发布作品到广场（标题 + 提示词 + 图片）
+  - 支持点赞 / 取消点赞
+  - 支持“我的作品”查看与删除
+- **作品广场**：
+  - 支持排序：最新 / 最热
+  - 支持分页浏览
 - **管理员面板**：
   - 输入管理员密码（`ADMIN_PASSWORD`）
   - 可在线修改访问密码
   - 查看“今日统计”：请求总张数、成功张数、失败张数、处理中张数
   - 查看失败原因聚合（Top）
+  - 支持按作品 ID 下架 / 恢复作品
 - **Docker + GitHub Actions**：支持自动构建并推送镜像到 GHCR
 
 ---
@@ -65,12 +74,27 @@
 - `/api/upload-pixhost`
 - `/api/image-proxy`
 - `/api/stats`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/my/works`
+- `POST /api/works`
+- `GET /api/works?sort=latest|hot&limit=20&offset=0`
+- `GET /api/works/:id`
+- `DELETE /api/works/:id`
+- `POST /api/works/:id/like`
+- `DELETE /api/works/:id/like`
+- `GET /api/users/:id`
+- `GET /api/users/:id/works`
 
 管理员接口：
 
 - `POST /api/admin/verify`
 - `GET /api/admin/daily-report?date=YYYY-MM-DD`
 - `POST /api/admin/access-password`
+- `POST /api/admin/works/:id/hide`
+- `POST /api/admin/works/:id/restore`
 
 ---
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppSettings, AspectRatio, AuthUser, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier, WorkItem } from './types'
+import type { AppSettings, AspectRatio, AuthUser, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier, WorkItem, WorkSort } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
@@ -10,7 +10,7 @@ import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
 import { AuthPanel } from './components/AuthPanel'
 import { WorksSquare } from './components/WorksSquare'
-import { checkServerPassword, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, getCurrentUser, likeWork, listBackgroundTasks, listWorks as listWorksSquare, loginUser, logoutUser, publishWork, registerUser, retryBackgroundTask, unlikeWork, uploadImageToPixhost } from './lib/api'
+import { checkServerPassword, createBackgroundTask, createId, deleteWork, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, getCurrentUser, likeWork, listBackgroundTasks, listMyWorks, listWorks as listWorksSquare, loginUser, logoutUser, publishWork, registerUser, retryBackgroundTask, unlikeWork, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import { addActiveBackgroundTask, loadActiveBackgroundTasks, removeActiveBackgroundTask, DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
@@ -40,6 +40,11 @@ export default function App() {
   const [me, setMe] = useState<AuthUser | null>(null)
   const [works, setWorks] = useState<WorkItem[]>([])
   const [worksLoading, setWorksLoading] = useState(false)
+  const [workSort, setWorkSort] = useState<WorkSort>('latest')
+  const [workOffset, setWorkOffset] = useState(0)
+  const [workTotal, setWorkTotal] = useState(0)
+  const [myWorks, setMyWorks] = useState<WorkItem[]>([])
+  const [myWorksLoading, setMyWorksLoading] = useState(false)
   const uploadCacheRef = useRef(new Map<string, Map<number, UploadResult>>())
   const pollTimersRef = useRef(new Map<string, number>())
   const settingsRef = useRef(settings)
@@ -88,11 +93,26 @@ export default function App() {
     if (!unlocked) {
       setMe(null)
       setWorks([])
+      setMyWorks([])
+      setWorkOffset(0)
+      setWorkTotal(0)
       return
     }
     void refreshCurrentUser()
-    void refreshWorks()
   }, [unlocked, settings.accessPassword])
+
+  useEffect(() => {
+    if (!unlocked) return
+    void refreshWorks()
+  }, [unlocked, settings.accessPassword, workSort, workOffset])
+
+  useEffect(() => {
+    if (!unlocked || !me) {
+      setMyWorks([])
+      return
+    }
+    void refreshMyWorks()
+  }, [unlocked, me?.id, settings.accessPassword, workSort])
 
   useEffect(() => {
     const handleResume = () => {
@@ -165,6 +185,7 @@ export default function App() {
     const accessPassword = settingsRef.current.accessPassword.trim()
     await logoutUser(accessPassword)
     setMe(null)
+    setMyWorks([])
     showMessage('已退出登录', 'ok')
     await refreshWorks()
   }
@@ -265,16 +286,35 @@ export default function App() {
     const password = settingsRef.current.accessPassword.trim()
     if (!password) {
       setWorks([])
+      setWorkTotal(0)
       return
     }
     setWorksLoading(true)
     try {
-      const data = await listWorksSquare(password, { limit: 40, offset: 0 })
+      const data = await listWorksSquare(password, { limit: 20, offset: workOffset, sort: workSort })
       setWorks(data.works)
+      setWorkTotal(data.total)
     } catch (error) {
       if (showError) showMessage(error instanceof Error ? error.message : '获取作品广场失败', 'error')
     } finally {
       setWorksLoading(false)
+    }
+  }
+
+  async function refreshMyWorks(showError = false) {
+    const password = settingsRef.current.accessPassword.trim()
+    if (!password || !me) {
+      setMyWorks([])
+      return
+    }
+    setMyWorksLoading(true)
+    try {
+      const data = await listMyWorks(password, { limit: 20, offset: 0, sort: workSort })
+      setMyWorks(data.works)
+    } catch (error) {
+      if (showError) showMessage(error instanceof Error ? error.message : '获取我的作品失败', 'error')
+    } finally {
+      setMyWorksLoading(false)
     }
   }
 
@@ -734,6 +774,7 @@ export default function App() {
       })
       showMessage('作品发布成功，已进入广场', 'ok')
       await refreshWorks()
+      await refreshMyWorks()
     } catch (error) {
       showMessage(error instanceof Error ? error.message : '发布作品失败', 'error')
     }
@@ -749,14 +790,54 @@ export default function App() {
     const nextLiked = !work.likedByMe
     const nextLikeCount = Math.max(0, work.likeCount + (nextLiked ? 1 : -1))
     setWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
+    setMyWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
 
     try {
       if (nextLiked) await likeWork(accessPassword, work.id)
       else await unlikeWork(accessPassword, work.id)
     } catch (error) {
       setWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
+      setMyWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
       showMessage(error instanceof Error ? error.message : '点赞操作失败', 'error')
     }
+  }
+
+  async function handleDeleteMyWork(work: WorkItem) {
+    if (!me) {
+      showMessage('请先登录', 'error')
+      return
+    }
+    if (work.userId !== me.id) {
+      showMessage('只能删除自己的作品', 'error')
+      return
+    }
+    if (!confirm(`确认删除作品「${work.title}」？`)) return
+
+    const accessPassword = settings.accessPassword.trim()
+    try {
+      await deleteWork(accessPassword, work.id)
+      setMyWorks((prev) => prev.filter((item) => item.id !== work.id))
+      setWorks((prev) => prev.filter((item) => item.id !== work.id))
+      showMessage('作品已删除', 'ok')
+      await refreshWorks()
+      await refreshMyWorks()
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : '删除作品失败', 'error')
+    }
+  }
+
+  function handleChangeWorkSort(nextSort: WorkSort) {
+    setWorkSort(nextSort)
+    setWorkOffset(0)
+  }
+
+  function handleChangeWorkPage(nextOffset: number) {
+    setWorkOffset(Math.max(0, nextOffset))
+  }
+
+  async function handleRefreshSquare() {
+    await refreshWorks(true)
+    await refreshMyWorks(true)
   }
 
   async function handleRetryBackgroundTask(taskId: string) {
@@ -1009,10 +1090,19 @@ export default function App() {
           </div>
           <WorksSquare
             works={works}
+            myWorks={myWorks}
             me={me}
             loading={worksLoading}
-            onRefresh={() => void refreshWorks(true)}
+            myWorksLoading={myWorksLoading}
+            sort={workSort}
+            offset={workOffset}
+            total={workTotal}
+            pageSize={20}
+            onRefresh={() => void handleRefreshSquare()}
+            onSortChange={handleChangeWorkSort}
+            onPageChange={handleChangeWorkPage}
             onToggleLike={(work) => void handleToggleLike(work)}
+            onDeleteMyWork={(work) => void handleDeleteMyWork(work)}
           />
           <TaskQueue
             tasks={tasks}
