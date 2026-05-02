@@ -11,6 +11,7 @@ import type {
   InputImage,
   StreamEvent,
   UserProfile,
+  WorkComment,
   WorkItem,
   WorkSort,
 } from '../types'
@@ -345,6 +346,23 @@ export async function unlikeWork(accessPassword: string, workId: number): Promis
   if (!data.ok) throw new Error(data.message || '取消点赞失败')
 }
 
+export async function favoriteWork(accessPassword: string, workId: number): Promise<void> {
+  const data = await postJson<{ ok?: boolean; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/favorite`,
+    {},
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '收藏失败')
+}
+
+export async function unfavoriteWork(accessPassword: string, workId: number): Promise<void> {
+  const data = await deleteJson<{ ok?: boolean; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/favorite`,
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '取消收藏失败')
+}
+
 export async function deleteWork(accessPassword: string, workId: number): Promise<void> {
   const data = await deleteJson<{ ok?: boolean; message?: string }>(
     `/api/works/${encodeURIComponent(String(workId))}`,
@@ -367,6 +385,29 @@ export async function listMyWorks(
     accessPassword,
   )
   if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取我的作品失败')
+  return {
+    works: data.works,
+    total: Number(data.total || 0),
+    limit: Number(data.limit || options?.limit || 20),
+    offset: Number(data.offset || options?.offset || 0),
+    sort: data.sort === 'hot' ? 'hot' : 'latest',
+  }
+}
+
+export async function listMyFavoriteWorks(
+  accessPassword: string,
+  options?: { limit?: number; offset?: number; sort?: WorkSort },
+): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number; sort: WorkSort }> {
+  const params = new URLSearchParams()
+  if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
+  if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  if (options?.sort) params.set('sort', options.sort)
+  const query = params.toString()
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; sort?: WorkSort; message?: string }>(
+    `/api/my/favorites${query ? `?${query}` : ''}`,
+    accessPassword,
+  )
+  if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取我的收藏失败')
   return {
     works: data.works,
     total: Number(data.total || 0),
@@ -407,6 +448,46 @@ export async function listUserWorksById(
     offset: Number(data.offset || options?.offset || 0),
     sort: data.sort === 'hot' ? 'hot' : 'latest',
   }
+}
+
+export async function listWorkComments(
+  accessPassword: string,
+  workId: number,
+  options?: { limit?: number; offset?: number },
+): Promise<{ comments: WorkComment[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams()
+  if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
+  if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  const query = params.toString()
+  const data = await getJson<{ ok?: boolean; comments?: WorkComment[]; total?: number; limit?: number; offset?: number; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/comments${query ? `?${query}` : ''}`,
+    accessPassword,
+  )
+  if (!data.ok || !Array.isArray(data.comments)) throw new Error(data.message || '获取评论失败')
+  return {
+    comments: data.comments,
+    total: Number(data.total || 0),
+    limit: Number(data.limit || options?.limit || 30),
+    offset: Number(data.offset || options?.offset || 0),
+  }
+}
+
+export async function createWorkComment(accessPassword: string, workId: number, content: string): Promise<WorkComment> {
+  const data = await postJson<{ ok?: boolean; comment?: WorkComment; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/comments`,
+    { content },
+    accessPassword,
+  )
+  if (!data.ok || !data.comment) throw new Error(data.message || '发表评论失败')
+  return data.comment
+}
+
+export async function deleteWorkComment(accessPassword: string, commentId: number): Promise<void> {
+  const data = await deleteJson<{ ok?: boolean; message?: string }>(
+    `/api/comments/${encodeURIComponent(String(commentId))}`,
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '删除评论失败')
 }
 
 export async function hideWorkByAdmin(adminPassword: string, workId: number): Promise<{ ok: true; message: string }> {

@@ -131,6 +131,9 @@ export interface WorkItem {
   createdAt: number
   likeCount: number
   likedByMe: boolean
+  favoriteCount: number
+  favoritedByMe: boolean
+  commentCount: number
 }
 
 export interface UserProfile {
@@ -139,6 +142,17 @@ export interface UserProfile {
   createdAt: number
   worksCount: number
   likesReceived: number
+  favoritesReceived: number
+  commentsReceived: number
+}
+
+export interface WorkComment {
+  id: number
+  workId: number
+  userId: number
+  username: string
+  content: string
+  createdAt: number
 }
 
 export interface GenerateSuccessResponse {

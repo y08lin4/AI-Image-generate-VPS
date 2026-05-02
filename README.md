@@ -39,6 +39,8 @@
 - **作品广场**：
   - 支持排序：最新 / 最热
   - 支持分页浏览
+  - 支持收藏、评论
+  - 支持查看用户公开主页
 - **管理员面板**：
   - 输入管理员密码（`ADMIN_PASSWORD`）
   - 可在线修改访问密码
@@ -79,12 +81,18 @@
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `GET /api/my/works`
+- `GET /api/my/favorites`
 - `POST /api/works`
 - `GET /api/works?sort=latest|hot&limit=20&offset=0`
 - `GET /api/works/:id`
 - `DELETE /api/works/:id`
 - `POST /api/works/:id/like`
 - `DELETE /api/works/:id/like`
+- `POST /api/works/:id/favorite`
+- `DELETE /api/works/:id/favorite`
+- `GET /api/works/:id/comments`
+- `POST /api/works/:id/comments`
+- `DELETE /api/comments/:id`
 - `GET /api/users/:id`
 - `GET /api/users/:id/works`
 

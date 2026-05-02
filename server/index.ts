@@ -203,6 +203,9 @@ interface WorkListRow {
   status: WorkStatus
   like_count: number
   liked_by_me: number
+  favorite_count: number
+  favorited_by_me: number
+  comment_count: number
 }
 
 interface UserProfileRow {
@@ -211,6 +214,21 @@ interface UserProfileRow {
   created_at: number
   works_count: number
   likes_received: number
+  favorites_received: number
+  comments_received: number
+}
+
+interface CreateCommentPayload {
+  content?: string
+}
+
+interface WorkCommentRow {
+  id: number
+  work_id: number
+  user_id: number
+  username: string
+  content: string
+  created_at: number
 }
 
 const SIZE_MAP: Record<Exclude<ResolutionTier, 'auto'>, Record<Ratio, string>> = {
@@ -423,6 +441,21 @@ app.get('/api/my/works', (req, res) => {
   return json(res, { ok: true, works, total, limit, offset, sort })
 })
 
+app.get('/api/my/favorites', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const limit = clamp(Number(req.query.limit), 1, 100, 20)
+  const offset = clamp(Number(req.query.offset), 0, 200000, 0)
+  const sort = parseWorkSort(req.query.sort)
+  const works = listFavoriteWorksByUser(db, me.id, limit, offset, me.id, sort)
+  const total = countFavoriteWorksByUser(db, me.id)
+  return json(res, { ok: true, works, total, limit, offset, sort })
+})
+
 app.post('/api/works', (req, res) => {
   const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
@@ -499,6 +532,22 @@ app.post('/api/works/:id/like', (req, res) => {
   return json(res, { ok: true })
 })
 
+app.post('/api/works/:id/favorite', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  const work = getWorkById(db, workId, me.id)
+  if (!work || work.status !== 'active') return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  addWorkFavorite(db, workId, me.id)
+  return json(res, { ok: true })
+})
+
 app.delete('/api/works/:id/like', (req, res) => {
   const authError = requireAccessPassword(req, config, runtimeState)
   if (authError) return jsonError(res, authError.type, authError.message, authError.status)
@@ -509,6 +558,79 @@ app.delete('/api/works/:id/like', (req, res) => {
   const workId = Number(req.params.id)
   if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
   removeWorkLike(db, workId, me.id)
+  return json(res, { ok: true })
+})
+
+app.delete('/api/works/:id/favorite', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  removeWorkFavorite(db, workId, me.id)
+  return json(res, { ok: true })
+})
+
+app.get('/api/works/:id/comments', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  const work = getWorkById(db, workId, me?.id)
+  if (!work) return jsonError(res, 'bad_request', '作品不存在', 404)
+  if (work.status === 'hidden' && me?.id !== work.userId) return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  const limit = clamp(Number(req.query.limit), 1, 100, 30)
+  const offset = clamp(Number(req.query.offset), 0, 200000, 0)
+  const comments = listWorkComments(db, workId, limit, offset)
+  const total = countWorkComments(db, workId)
+  return json(res, { ok: true, comments, total, limit, offset })
+})
+
+app.post('/api/works/:id/comments', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  const work = getWorkById(db, workId, me.id)
+  if (!work || work.status !== 'active') return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  const payload = req.body as CreateCommentPayload
+  const content = String(payload?.content || '').trim()
+  const contentError = validateCommentContent(content)
+  if (contentError) return jsonError(res, 'bad_request', contentError, 400)
+
+  const comment = createWorkComment(db, workId, me.id, content)
+  if (!comment) return jsonError(res, 'internal_error', '评论已创建但读取失败', 500)
+  return json(res, { ok: true, comment }, 201)
+})
+
+app.delete('/api/comments/:id', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const commentId = Number(req.params.id)
+  if (!Number.isInteger(commentId) || commentId <= 0) return jsonError(res, 'bad_request', '评论 ID 无效', 400)
+  const comment = getCommentById(db, commentId)
+  if (!comment) return jsonError(res, 'bad_request', '评论不存在', 404)
+
+  const relatedWork = getWorkById(db, comment.workId, me.id)
+  const canDelete = comment.userId === me.id || relatedWork?.userId === me.id
+  if (!canDelete) return jsonError(res, 'auth_error', '无权删除该评论', 403)
+
+  deleteCommentById(db, commentId)
   return json(res, { ok: true })
 })
 
@@ -1236,6 +1358,9 @@ function mapWorkRow(row: WorkListRow) {
     createdAt: Number(row.created_at),
     likeCount: Number(row.like_count || 0),
     likedByMe: Number(row.liked_by_me || 0) > 0,
+    favoriteCount: Number(row.favorite_count || 0),
+    favoritedByMe: Number(row.favorited_by_me || 0) > 0,
+    commentCount: Number(row.comment_count || 0),
   }
 }
 
@@ -1264,12 +1389,15 @@ function listWorks(database: DatabaseSync, limit: number, offset: number, viewer
       w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
-      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id) AS favorite_count,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id AND wf.user_id = ?) AS favorited_by_me,
+      (SELECT COUNT(*) FROM work_comments wc WHERE wc.work_id = w.id) AS comment_count
     FROM works w
     JOIN users u ON u.id = w.user_id
     WHERE w.status = 'active'
     ORDER BY ${getWorkOrderBy(sort)}
-    LIMIT ? OFFSET ?`).all(viewerId, limit, offset) as unknown as WorkListRow[]
+    LIMIT ? OFFSET ?`).all(viewerId, viewerId, limit, offset) as unknown as WorkListRow[]
   return rows.map(mapWorkRow)
 }
 
@@ -1295,13 +1423,16 @@ function listWorksByUser(
       w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
-      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id) AS favorite_count,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id AND wf.user_id = ?) AS favorited_by_me,
+      (SELECT COUNT(*) FROM work_comments wc WHERE wc.work_id = w.id) AS comment_count
     FROM works w
     JOIN users u ON u.id = w.user_id
     WHERE w.user_id = ?
     ${whereStatus}
     ORDER BY ${getWorkOrderBy(sort)}
-    LIMIT ? OFFSET ?`).all(viewerId, userId, limit, offset) as unknown as WorkListRow[]
+    LIMIT ? OFFSET ?`).all(viewerId, viewerId, userId, limit, offset) as unknown as WorkListRow[]
   return rows.map(mapWorkRow)
 }
 
@@ -1318,11 +1449,14 @@ function getWorkById(database: DatabaseSync, workId: number, viewerUserId?: numb
       w.status,
       w.created_at,
       (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
-      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id) AS favorite_count,
+      (SELECT COUNT(*) FROM work_favorites wf WHERE wf.work_id = w.id AND wf.user_id = ?) AS favorited_by_me,
+      (SELECT COUNT(*) FROM work_comments wc WHERE wc.work_id = w.id) AS comment_count
     FROM works w
     JOIN users u ON u.id = w.user_id
     WHERE w.id = ?`)
-    .get(viewerId, workId) as WorkListRow | undefined
+    .get(viewerId, viewerId, workId) as WorkListRow | undefined
   return row ? mapWorkRow(row) : null
 }
 
@@ -1352,13 +1486,135 @@ function removeWorkLike(database: DatabaseSync, workId: number, userId: number) 
   database.prepare('DELETE FROM work_likes WHERE work_id = ? AND user_id = ?').run(workId, userId)
 }
 
+function addWorkFavorite(database: DatabaseSync, workId: number, userId: number) {
+  const now = Date.now()
+  database
+    .prepare(`INSERT INTO work_favorites (work_id, user_id, created_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(work_id, user_id) DO NOTHING`)
+    .run(workId, userId, now)
+}
+
+function removeWorkFavorite(database: DatabaseSync, workId: number, userId: number) {
+  database.prepare('DELETE FROM work_favorites WHERE work_id = ? AND user_id = ?').run(workId, userId)
+}
+
+function listFavoriteWorksByUser(
+  database: DatabaseSync,
+  userId: number,
+  limit: number,
+  offset: number,
+  viewerUserId?: number,
+  sort: WorkSort = 'latest',
+) {
+  const viewerId = Number(viewerUserId || 0)
+  const rows = database.prepare(`SELECT
+      w.id,
+      w.user_id,
+      u.username,
+      w.title,
+      w.prompt,
+      w.image_url,
+      w.thumb_url,
+      w.status,
+      w.created_at,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me,
+      (SELECT COUNT(*) FROM work_favorites wf2 WHERE wf2.work_id = w.id) AS favorite_count,
+      (SELECT COUNT(*) FROM work_favorites wf2 WHERE wf2.work_id = w.id AND wf2.user_id = ?) AS favorited_by_me,
+      (SELECT COUNT(*) FROM work_comments wc WHERE wc.work_id = w.id) AS comment_count
+    FROM work_favorites wf
+    JOIN works w ON w.id = wf.work_id
+    JOIN users u ON u.id = w.user_id
+    WHERE wf.user_id = ?
+      AND w.status = 'active'
+    ORDER BY ${sort === 'hot' ? 'like_count DESC, w.created_at DESC' : 'wf.created_at DESC'}
+    LIMIT ? OFFSET ?`).all(viewerId, viewerId, userId, limit, offset) as unknown as WorkListRow[]
+  return rows.map(mapWorkRow)
+}
+
+function countFavoriteWorksByUser(database: DatabaseSync, userId: number) {
+  const row = database.prepare(`SELECT COUNT(*) AS total
+    FROM work_favorites wf
+    JOIN works w ON w.id = wf.work_id
+    WHERE wf.user_id = ?
+      AND w.status = 'active'`).get(userId) as { total: number } | undefined
+  return Number(row?.total || 0)
+}
+
+function validateCommentContent(content: string) {
+  if (!content) return '评论内容不能为空'
+  if (content.length > 1000) return '评论内容不能超过 1000 字'
+  return ''
+}
+
+function mapWorkCommentRow(row: WorkCommentRow) {
+  return {
+    id: Number(row.id),
+    workId: Number(row.work_id),
+    userId: Number(row.user_id),
+    username: row.username,
+    content: row.content,
+    createdAt: Number(row.created_at),
+  }
+}
+
+function createWorkComment(database: DatabaseSync, workId: number, userId: number, content: string) {
+  const now = Date.now()
+  const result = database
+    .prepare('INSERT INTO work_comments (work_id, user_id, content, created_at) VALUES (?, ?, ?, ?)')
+    .run(workId, userId, content, now) as { lastInsertRowid: number | bigint }
+  return getCommentById(database, Number(result.lastInsertRowid))
+}
+
+function listWorkComments(database: DatabaseSync, workId: number, limit: number, offset: number) {
+  const rows = database.prepare(`SELECT
+      c.id,
+      c.work_id,
+      c.user_id,
+      u.username,
+      c.content,
+      c.created_at
+    FROM work_comments c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.work_id = ?
+    ORDER BY c.created_at DESC
+    LIMIT ? OFFSET ?`).all(workId, limit, offset) as unknown as WorkCommentRow[]
+  return rows.map(mapWorkCommentRow)
+}
+
+function countWorkComments(database: DatabaseSync, workId: number) {
+  const row = database.prepare('SELECT COUNT(*) as total FROM work_comments WHERE work_id = ?').get(workId) as { total: number } | undefined
+  return Number(row?.total || 0)
+}
+
+function getCommentById(database: DatabaseSync, commentId: number) {
+  const row = database.prepare(`SELECT
+      c.id,
+      c.work_id,
+      c.user_id,
+      u.username,
+      c.content,
+      c.created_at
+    FROM work_comments c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.id = ?`).get(commentId) as WorkCommentRow | undefined
+  return row ? mapWorkCommentRow(row) : null
+}
+
+function deleteCommentById(database: DatabaseSync, commentId: number) {
+  database.prepare('DELETE FROM work_comments WHERE id = ?').run(commentId)
+}
+
 function getUserProfile(database: DatabaseSync, userId: number) {
   const row = database.prepare(`SELECT
       u.id,
       u.username,
       u.created_at,
       (SELECT COUNT(*) FROM works w WHERE w.user_id = u.id AND w.status = 'active') AS works_count,
-      (SELECT COUNT(*) FROM work_likes wl JOIN works w2 ON w2.id = wl.work_id WHERE w2.user_id = u.id AND w2.status = 'active') AS likes_received
+      (SELECT COUNT(*) FROM work_likes wl JOIN works w2 ON w2.id = wl.work_id WHERE w2.user_id = u.id AND w2.status = 'active') AS likes_received,
+      (SELECT COUNT(*) FROM work_favorites wf JOIN works w3 ON w3.id = wf.work_id WHERE w3.user_id = u.id AND w3.status = 'active') AS favorites_received,
+      (SELECT COUNT(*) FROM work_comments wc JOIN works w4 ON w4.id = wc.work_id WHERE w4.user_id = u.id AND w4.status = 'active') AS comments_received
     FROM users u
     WHERE u.id = ?`).get(userId) as UserProfileRow | undefined
 
@@ -1369,6 +1625,8 @@ function getUserProfile(database: DatabaseSync, userId: number) {
     createdAt: Number(row.created_at),
     worksCount: Number(row.works_count || 0),
     likesReceived: Number(row.likes_received || 0),
+    favoritesReceived: Number(row.favorites_received || 0),
+    commentsReceived: Number(row.comments_received || 0),
   }
 }
 
@@ -1922,6 +2180,26 @@ function setupSchema(database: DatabaseSync) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
     'CREATE INDEX IF NOT EXISTS idx_work_likes_user ON work_likes(user_id, created_at DESC)',
+    `CREATE TABLE IF NOT EXISTS work_favorites (
+      work_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (work_id, user_id),
+      FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_work_favorites_user ON work_favorites(user_id, created_at DESC)',
+    `CREATE TABLE IF NOT EXISTS work_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_work_comments_work_created ON work_comments(work_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_work_comments_user_created ON work_comments(user_id, created_at DESC)',
   ]
 
   for (const statement of statements) database.prepare(statement).run()

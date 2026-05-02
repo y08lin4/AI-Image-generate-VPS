@@ -4,9 +4,11 @@ import { getImageProxyUrl } from '../lib/api'
 interface Props {
   works: WorkItem[]
   myWorks: WorkItem[]
+  favoriteWorks: WorkItem[]
   me: AuthUser | null
   loading?: boolean
   myWorksLoading?: boolean
+  favoriteWorksLoading?: boolean
   sort: WorkSort
   offset: number
   total: number
@@ -15,6 +17,9 @@ interface Props {
   onSortChange: (sort: WorkSort) => void
   onPageChange: (offset: number) => void
   onToggleLike: (work: WorkItem) => void
+  onToggleFavorite: (work: WorkItem) => void
+  onOpenComments: (work: WorkItem) => void
+  onOpenUserProfile: (userId: number) => void
   onDeleteMyWork: (work: WorkItem) => void
 }
 
@@ -32,12 +37,18 @@ function WorkCard({
   me,
   loading,
   onToggleLike,
+  onToggleFavorite,
+  onOpenComments,
+  onOpenUserProfile,
   onDelete,
 }: {
   work: WorkItem
   me: AuthUser | null
   loading: boolean
   onToggleLike: (work: WorkItem) => void
+  onToggleFavorite: (work: WorkItem) => void
+  onOpenComments: (work: WorkItem) => void
+  onOpenUserProfile: (userId: number) => void
   onDelete?: (work: WorkItem) => void
 }) {
   const isMine = Boolean(me && work.userId === me.id)
@@ -48,7 +59,9 @@ function WorkCard({
         <strong>{work.title}</strong>
         <p>{work.prompt}</p>
         <div className="work-card-meta">
-          <span>@{work.username}</span>
+          <button type="button" className="work-link-btn" onClick={() => onOpenUserProfile(work.userId)}>
+            @{work.username}
+          </button>
           <span>{formatDate(work.createdAt)}</span>
         </div>
         {work.status === 'hidden' ? <small className="work-status-tag">已下架</small> : null}
@@ -61,6 +74,18 @@ function WorkCard({
             title={me ? (work.status === 'active' ? '' : '下架作品不可点赞') : '登录后可点赞'}
           >
             {work.likedByMe ? '❤️' : '🤍'} {work.likeCount}
+          </button>
+          <button
+            type="button"
+            className={`work-fav-btn ${work.favoritedByMe ? 'active' : ''}`}
+            onClick={() => onToggleFavorite(work)}
+            disabled={loading || !me || work.status !== 'active'}
+            title={me ? (work.status === 'active' ? '' : '下架作品不可收藏') : '登录后可收藏'}
+          >
+            {work.favoritedByMe ? '⭐' : '☆'} {work.favoriteCount}
+          </button>
+          <button type="button" className="work-comment-btn" onClick={() => onOpenComments(work)} disabled={loading}>
+            评论 {work.commentCount}
           </button>
           {isMine && onDelete ? (
             <button type="button" className="work-delete-btn" onClick={() => onDelete(work)} disabled={loading}>
@@ -76,9 +101,11 @@ function WorkCard({
 export function WorksSquare({
   works,
   myWorks,
+  favoriteWorks,
   me,
   loading = false,
   myWorksLoading = false,
+  favoriteWorksLoading = false,
   sort,
   offset,
   total,
@@ -87,10 +114,35 @@ export function WorksSquare({
   onSortChange,
   onPageChange,
   onToggleLike,
+  onToggleFavorite,
+  onOpenComments,
+  onOpenUserProfile,
   onDeleteMyWork,
 }: Props) {
   const page = Math.floor(offset / pageSize) + 1
   const totalPages = Math.max(1, Math.ceil(Math.max(0, total) / pageSize))
+
+  const renderList = (items: WorkItem[], listLoading: boolean, emptyText: string, withDelete = false) => (
+    !items.length ? (
+      <div className="works-square-empty">{emptyText}</div>
+    ) : (
+      <div className="works-square-list">
+        {items.map((work) => (
+          <WorkCard
+            key={`${withDelete ? 'my' : 'list'}-${work.id}`}
+            work={work}
+            me={me}
+            loading={listLoading}
+            onToggleLike={onToggleLike}
+            onToggleFavorite={onToggleFavorite}
+            onOpenComments={onOpenComments}
+            onOpenUserProfile={onOpenUserProfile}
+            onDelete={withDelete ? onDeleteMyWork : undefined}
+          />
+        ))}
+      </div>
+    )
+  )
 
   return (
     <section className="works-square">
@@ -114,41 +166,26 @@ export function WorksSquare({
         </div>
       </div>
 
-      {!works.length ? (
-        <div className="works-square-empty">暂无作品，先生成一张并发布吧。</div>
-      ) : (
-        <>
-          <div className="works-square-list">
-            {works.map((work) => (
-              <WorkCard
-                key={work.id}
-                work={work}
-                me={me}
-                loading={loading}
-                onToggleLike={onToggleLike}
-              />
-            ))}
-          </div>
-          <div className="works-page-bar">
-            <button
-              type="button"
-              className="ghost-btn small"
-              disabled={loading || offset <= 0}
-              onClick={() => onPageChange(Math.max(0, offset - pageSize))}
-            >
-              上一页
-            </button>
-            <button
-              type="button"
-              className="ghost-btn small"
-              disabled={loading || offset + pageSize >= total}
-              onClick={() => onPageChange(offset + pageSize)}
-            >
-              下一页
-            </button>
-          </div>
-        </>
-      )}
+      {renderList(works, loading, '暂无作品，先生成一张并发布吧。')}
+
+      <div className="works-page-bar">
+        <button
+          type="button"
+          className="ghost-btn small"
+          disabled={loading || offset <= 0}
+          onClick={() => onPageChange(Math.max(0, offset - pageSize))}
+        >
+          上一页
+        </button>
+        <button
+          type="button"
+          className="ghost-btn small"
+          disabled={loading || offset + pageSize >= total}
+          onClick={() => onPageChange(offset + pageSize)}
+        >
+          下一页
+        </button>
+      </div>
 
       {me ? (
         <div className="my-works-section">
@@ -158,22 +195,15 @@ export function WorksSquare({
               {myWorksLoading ? '加载中...' : '同步'}
             </button>
           </div>
-          {!myWorks.length ? (
-            <div className="works-square-empty">你还没有发布作品。</div>
-          ) : (
-            <div className="works-square-list">
-              {myWorks.map((work) => (
-                <WorkCard
-                  key={`my-${work.id}`}
-                  work={work}
-                  me={me}
-                  loading={myWorksLoading}
-                  onToggleLike={onToggleLike}
-                  onDelete={onDeleteMyWork}
-                />
-              ))}
-            </div>
-          )}
+          {renderList(myWorks, myWorksLoading, '你还没有发布作品。', true)}
+
+          <div className="my-works-head">
+            <h4>我的收藏</h4>
+            <button type="button" className="ghost-btn small" onClick={onRefresh} disabled={favoriteWorksLoading}>
+              {favoriteWorksLoading ? '加载中...' : '同步'}
+            </button>
+          </div>
+          {renderList(favoriteWorks, favoriteWorksLoading, '你还没有收藏作品。')}
         </div>
       ) : null}
     </section>
