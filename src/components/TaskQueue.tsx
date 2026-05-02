@@ -43,7 +43,7 @@ function statusText(task: GenerationTask) {
 function requestModeLabel(task: GenerationTask) {
   if (task.requestMode === 'history') return '历史'
   if (task.requestMode === 'background') return '后台'
-  if (task.requestMode === 'worker') return '???'
+  if (task.requestMode === 'worker') return '代理'
   return '直连'
 }
 

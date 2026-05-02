@@ -959,10 +959,10 @@ app.listen(config.port, () => {
   console.log(`[server] AI-Image-generate-VPS started on http://0.0.0.0:${config.port}`)
   console.log(`[server] sqlite: ${config.dbPath}`)
   if (!runtimeState.accessPassword || runtimeState.accessPassword === 'change-me') {
-    console.warn('[server] ACCESS_PASSWORD ???????? API ??? 503')
+    console.warn('[server] ACCESS_PASSWORD 未配置或仍为默认值，API 将返回 503')
   }
   if (!config.adminPassword || config.adminPassword === 'change-me') {
-    console.warn('[server] ADMIN_PASSWORD ????????????? 503')
+    console.warn('[server] ADMIN_PASSWORD 未配置或仍为默认值，管理员接口将返回 503')
   }
 })
 
@@ -1050,7 +1050,7 @@ function requireAccessPassword(
   if (!expected || expected === 'change-me') {
     return {
       type: 'invalid_config',
-      message: '???????????????? ACCESS_PASSWORD',
+      message: '服务端未正确配置 ACCESS_PASSWORD',
       status: 503,
     }
   }
@@ -1059,7 +1059,7 @@ function requireAccessPassword(
   if (provided !== expected) {
     return {
       type: 'auth_error',
-      message: '????????????',
+      message: '访问密码错误',
       status: 401,
     }
   }
@@ -1072,7 +1072,7 @@ function verifyAdminPasswordValue(value: string | undefined, appConfig: AppConfi
   if (!expected || expected === 'change-me') {
     return {
       type: 'invalid_config',
-      message: '?????????????? ADMIN_PASSWORD',
+      message: '服务端未正确配置 ADMIN_PASSWORD',
       status: 503,
     }
   }
@@ -1081,7 +1081,7 @@ function verifyAdminPasswordValue(value: string | undefined, appConfig: AppConfi
   if (!provided) {
     return {
       type: 'auth_error',
-      message: '?????????',
+      message: '缺少管理员密码',
       status: 401,
     }
   }
@@ -1089,7 +1089,7 @@ function verifyAdminPasswordValue(value: string | undefined, appConfig: AppConfi
   if (provided !== expected) {
     return {
       type: 'auth_error',
-      message: '???????',
+      message: '管理员密码错误',
       status: 401,
     }
   }
