@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppSettings, AspectRatio, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier } from './types'
+import type { AppSettings, AspectRatio, AuthUser, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier, WorkItem } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
@@ -8,7 +8,9 @@ import { AccessGate } from './components/AccessGate'
 import { AdminModal } from './components/AdminModal'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { checkServerPassword, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
+import { AuthPanel } from './components/AuthPanel'
+import { WorksSquare } from './components/WorksSquare'
+import { checkServerPassword, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, getCurrentUser, likeWork, listBackgroundTasks, listWorks as listWorksSquare, loginUser, logoutUser, publishWork, registerUser, retryBackgroundTask, unlikeWork, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import { addActiveBackgroundTask, loadActiveBackgroundTasks, removeActiveBackgroundTask, DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
@@ -35,6 +37,9 @@ export default function App() {
   const [unlocked, setUnlocked] = useState(false)
   const [unlocking, setUnlocking] = useState(false)
   const [adminOpen, setAdminOpen] = useState(false)
+  const [me, setMe] = useState<AuthUser | null>(null)
+  const [works, setWorks] = useState<WorkItem[]>([])
+  const [worksLoading, setWorksLoading] = useState(false)
   const uploadCacheRef = useRef(new Map<string, Map<number, UploadResult>>())
   const pollTimersRef = useRef(new Map<string, number>())
   const settingsRef = useRef(settings)
@@ -78,6 +83,16 @@ export default function App() {
     if (!settings.accessPassword.trim()) return
     void restoreActiveBackgroundTasks(false)
   }, [settings.accessPassword])
+
+  useEffect(() => {
+    if (!unlocked) {
+      setMe(null)
+      setWorks([])
+      return
+    }
+    void refreshCurrentUser()
+    void refreshWorks()
+  }, [unlocked, settings.accessPassword])
 
   useEffect(() => {
     const handleResume = () => {
@@ -128,6 +143,30 @@ export default function App() {
 
   function patchSettings(patch: Partial<AppSettings>) {
     updateSettings({ ...settings, ...patch })
+  }
+
+  async function handleLogin(username: string, password: string) {
+    const accessPassword = settingsRef.current.accessPassword.trim()
+    const user = await loginUser(accessPassword, username, password)
+    setMe(user)
+    showMessage(`欢迎回来，${user.username}`, 'ok')
+    await refreshWorks()
+  }
+
+  async function handleRegister(username: string, password: string) {
+    const accessPassword = settingsRef.current.accessPassword.trim()
+    const user = await registerUser(accessPassword, username, password)
+    setMe(user)
+    showMessage(`注册成功，欢迎 ${user.username}`, 'ok')
+    await refreshWorks()
+  }
+
+  async function handleLogout() {
+    const accessPassword = settingsRef.current.accessPassword.trim()
+    await logoutUser(accessPassword)
+    setMe(null)
+    showMessage('已退出登录', 'ok')
+    await refreshWorks()
   }
 
   function patchTask(id: string, patch: Partial<GenerationTask>) {
@@ -206,6 +245,36 @@ export default function App() {
       setBackgroundStats(await getBackgroundStats(password))
     } catch {
       // 未配置后台数据库时不阻塞主流程
+    }
+  }
+
+  async function refreshCurrentUser() {
+    const password = settingsRef.current.accessPassword.trim()
+    if (!password) {
+      setMe(null)
+      return
+    }
+    try {
+      setMe(await getCurrentUser(password))
+    } catch {
+      setMe(null)
+    }
+  }
+
+  async function refreshWorks(showError = false) {
+    const password = settingsRef.current.accessPassword.trim()
+    if (!password) {
+      setWorks([])
+      return
+    }
+    setWorksLoading(true)
+    try {
+      const data = await listWorksSquare(password, { limit: 40, offset: 0 })
+      setWorks(data.works)
+    } catch (error) {
+      if (showError) showMessage(error instanceof Error ? error.message : '获取作品广场失败', 'error')
+    } finally {
+      setWorksLoading(false)
     }
   }
 
@@ -622,6 +691,74 @@ export default function App() {
     })
   }
 
+  async function handlePublishWork(taskId: string, result: GenerateResultItem) {
+    if (!me) {
+      showMessage('请先登录后再发布作品', 'error')
+      return
+    }
+    const accessPassword = settings.accessPassword.trim()
+    if (!accessPassword) {
+      showMessage('缺少服务端访问密码', 'error')
+      return
+    }
+    const task = tasks.find((item) => item.id === taskId)
+    if (!task) {
+      showMessage('任务不存在，无法发布', 'error')
+      return
+    }
+    let imageUrl = result.remoteUrl || result.image || ''
+    if (!imageUrl && result.localImageUrl) {
+      try {
+        const local = await fetchBackgroundTaskImage(result.localImageUrl, accessPassword)
+        imageUrl = local.dataUrl
+      } catch (error) {
+        showMessage(error instanceof Error ? error.message : '读取本地回传图片失败', 'error')
+        return
+      }
+    }
+    if (!imageUrl) {
+      showMessage('当前结果没有可发布的图片', 'error')
+      return
+    }
+    const defaultTitle = task.prompt.trim().slice(0, 32) || `作品 #${result.index + 1}`
+    const userInput = window.prompt('输入作品标题（可修改）', defaultTitle)
+    if (userInput === null) return
+    const title = userInput.trim() || defaultTitle
+
+    try {
+      await publishWork(accessPassword, {
+        title,
+        prompt: task.prompt,
+        imageUrl,
+        thumbUrl: result.remoteThumbUrl || result.remoteUrl,
+      })
+      showMessage('作品发布成功，已进入广场', 'ok')
+      await refreshWorks()
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : '发布作品失败', 'error')
+    }
+  }
+
+  async function handleToggleLike(work: WorkItem) {
+    if (!me) {
+      showMessage('请先登录后再点赞', 'error')
+      return
+    }
+
+    const accessPassword = settings.accessPassword.trim()
+    const nextLiked = !work.likedByMe
+    const nextLikeCount = Math.max(0, work.likeCount + (nextLiked ? 1 : -1))
+    setWorks((prev) => prev.map((item) => item.id === work.id ? { ...item, likedByMe: nextLiked, likeCount: nextLikeCount } : item))
+
+    try {
+      if (nextLiked) await likeWork(accessPassword, work.id)
+      else await unlikeWork(accessPassword, work.id)
+    } catch (error) {
+      setWorks((prev) => prev.map((item) => item.id === work.id ? work : item))
+      showMessage(error instanceof Error ? error.message : '点赞操作失败', 'error')
+    }
+  }
+
   async function handleRetryBackgroundTask(taskId: string) {
     if (!settings.accessPassword.trim()) {
       showMessage('重试后台任务需要先填写服务端访问密码', 'error')
@@ -853,6 +990,14 @@ export default function App() {
           <button type="button" className="generate-btn" onClick={handleGenerate}>
             提交任务（{settings.count} 张）
           </button>
+
+          <AuthPanel
+            me={me}
+            loading={worksLoading}
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+            onLogout={handleLogout}
+          />
         </aside>
 
         <section className="canvas-area">
@@ -862,9 +1007,17 @@ export default function App() {
               <p>{mode === 'image-to-image' ? '图生图' : '文生图'} · {ratio} · {getResolutionLabel(resolution)} · {size} · {getRequestModeLabel(settings.requestMode)} · 并发 {settings.concurrency}</p>
             </div>
           </div>
+          <WorksSquare
+            works={works}
+            me={me}
+            loading={worksLoading}
+            onRefresh={() => void refreshWorks(true)}
+            onToggleLike={(work) => void handleToggleLike(work)}
+          />
           <TaskQueue
             tasks={tasks}
             onUploadImage={handleUploadImage}
+            onPublishWork={(taskId, result) => void handlePublishWork(taskId, result)}
             onUseAsReference={handleUseAsReference}
             onMessage={showMessage}
             onRemove={removeTask}

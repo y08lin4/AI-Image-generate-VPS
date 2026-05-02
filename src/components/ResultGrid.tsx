@@ -11,6 +11,7 @@ interface Props {
   resolution: ResolutionTier
   size: string
   onUploadImage: (result: GenerateResultItem) => void
+  onPublishWork: (result: GenerateResultItem) => void
   onUseAsReference: (dataUrl: string) => void
   onMessage: (message: string, type?: 'ok' | 'error') => void
 }
@@ -26,7 +27,7 @@ type PreviewState = {
 
 type ResultCard = { index: number; loading: true } | (GenerateResultItem & { loading: false })
 
-export function ResultGrid({ loading, placeholders, results, ratio, resolution, size, onUploadImage, onUseAsReference, onMessage }: Props) {
+export function ResultGrid({ loading, placeholders, results, ratio, resolution, size, onUploadImage, onPublishWork, onUseAsReference, onMessage }: Props) {
   const [preview, setPreview] = useState<PreviewState | null>(null)
 
   const empty = !loading && results.length === 0
@@ -133,6 +134,7 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
                   onClick={() => void downloadResultImage(src, card.index)}
                 >下载</button>
                 <button type="button" onClick={() => void copyResultImage(src)}>复制</button>
+                <button type="button" onClick={() => onPublishWork(card)}>发布</button>
                 {canUseAsReference ? (
                   <button type="button" onClick={() => onUseAsReference(card.image!)}>作为参考图</button>
                 ) : null}

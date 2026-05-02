@@ -1,5 +1,6 @@
 import type {
   AdminDailyReport,
+  AuthUser,
   AspectRatio,
   BackgroundStats,
   BackgroundTask,
@@ -9,6 +10,8 @@ import type {
   GenerateSuccessResponse,
   InputImage,
   StreamEvent,
+  UserProfile,
+  WorkItem,
 } from '../types'
 import { getImageSize } from './ratios'
 
@@ -241,6 +244,130 @@ export async function checkServerPassword(accessPassword: string): Promise<{ ok:
   return { ok: false, message: data?.message || `验证失败：HTTP ${response.status}` }
 }
 
+export async function registerUser(accessPassword: string, username: string, password: string): Promise<AuthUser> {
+  const data = await postJson<{ ok?: boolean; user?: AuthUser; message?: string }>(
+    '/api/auth/register',
+    { username, password },
+    accessPassword,
+  )
+  if (!data.ok || !data.user) throw new Error(data.message || '注册失败')
+  return data.user
+}
+
+export async function loginUser(accessPassword: string, username: string, password: string): Promise<AuthUser> {
+  const data = await postJson<{ ok?: boolean; user?: AuthUser; message?: string }>(
+    '/api/auth/login',
+    { username, password },
+    accessPassword,
+  )
+  if (!data.ok || !data.user) throw new Error(data.message || '登录失败')
+  return data.user
+}
+
+export async function logoutUser(accessPassword: string): Promise<void> {
+  const data = await postJson<{ ok?: boolean; message?: string }>(
+    '/api/auth/logout',
+    {},
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '退出登录失败')
+}
+
+export async function getCurrentUser(accessPassword: string): Promise<AuthUser | null> {
+  const data = await getJson<{ ok?: boolean; user?: AuthUser | null; message?: string }>(
+    '/api/auth/me',
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '查询登录状态失败')
+  return data.user || null
+}
+
+export async function publishWork(
+  accessPassword: string,
+  payload: { title?: string; prompt: string; imageUrl: string; thumbUrl?: string },
+): Promise<WorkItem> {
+  const data = await postJson<{ ok?: boolean; work?: WorkItem; message?: string }>(
+    '/api/works',
+    payload,
+    accessPassword,
+  )
+  if (!data.ok || !data.work) throw new Error(data.message || '发布作品失败')
+  return data.work
+}
+
+export async function listWorks(
+  accessPassword: string,
+  options?: { limit?: number; offset?: number },
+): Promise<{ works: WorkItem[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams()
+  if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
+  if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  const query = params.toString()
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; total?: number; limit?: number; offset?: number; message?: string }>(
+    `/api/works${query ? `?${query}` : ''}`,
+    accessPassword,
+  )
+  if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取作品广场失败')
+  return {
+    works: data.works,
+    total: Number(data.total || 0),
+    limit: Number(data.limit || options?.limit || 20),
+    offset: Number(data.offset || options?.offset || 0),
+  }
+}
+
+export async function getWorkDetail(accessPassword: string, workId: number): Promise<WorkItem> {
+  const data = await getJson<{ ok?: boolean; work?: WorkItem; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}`,
+    accessPassword,
+  )
+  if (!data.ok || !data.work) throw new Error(data.message || '获取作品详情失败')
+  return data.work
+}
+
+export async function likeWork(accessPassword: string, workId: number): Promise<void> {
+  const data = await postJson<{ ok?: boolean; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/like`,
+    {},
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '点赞失败')
+}
+
+export async function unlikeWork(accessPassword: string, workId: number): Promise<void> {
+  const data = await deleteJson<{ ok?: boolean; message?: string }>(
+    `/api/works/${encodeURIComponent(String(workId))}/like`,
+    accessPassword,
+  )
+  if (!data.ok) throw new Error(data.message || '取消点赞失败')
+}
+
+export async function getUserProfileById(accessPassword: string, userId: number): Promise<UserProfile> {
+  const data = await getJson<{ ok?: boolean; user?: UserProfile; message?: string }>(
+    `/api/users/${encodeURIComponent(String(userId))}`,
+    accessPassword,
+  )
+  if (!data.ok || !data.user) throw new Error(data.message || '获取用户资料失败')
+  return data.user
+}
+
+export async function listUserWorksById(
+  accessPassword: string,
+  userId: number,
+  options?: { limit?: number; offset?: number },
+): Promise<WorkItem[]> {
+  const params = new URLSearchParams()
+  if (typeof options?.limit === 'number') params.set('limit', String(options.limit))
+  if (typeof options?.offset === 'number') params.set('offset', String(options.offset))
+  const query = params.toString()
+  const data = await getJson<{ ok?: boolean; works?: WorkItem[]; message?: string }>(
+    `/api/users/${encodeURIComponent(String(userId))}/works${query ? `?${query}` : ''}`,
+    accessPassword,
+  )
+  if (!data.ok || !Array.isArray(data.works)) throw new Error(data.message || '获取用户作品失败')
+  return data.works
+}
+
 
 
 export async function verifyAdminPassword(adminPassword: string): Promise<{ ok: true; message: string }> {
@@ -321,6 +448,14 @@ async function postJson<T>(url: string, body: unknown, accessPassword: string): 
 
 async function getJson<T>(url: string, accessPassword: string): Promise<T> {
   const response = await fetch(url, {
+    headers: { 'X-Access-Password': accessPassword },
+  })
+  return parseJsonOrThrow<T>(response)
+}
+
+async function deleteJson<T>(url: string, accessPassword: string): Promise<T> {
+  const response = await fetch(url, {
+    method: 'DELETE',
     headers: { 'X-Access-Password': accessPassword },
   })
   return parseJsonOrThrow<T>(response)

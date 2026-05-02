@@ -5,6 +5,7 @@ import { ResultGrid } from './ResultGrid'
 interface Props {
   tasks: GenerationTask[]
   onUploadImage: (taskId: string, result: GenerationTask['results'][number]) => void
+  onPublishWork: (taskId: string, result: GenerationTask['results'][number]) => void
   onUseAsReference: (dataUrl: string) => void
   onMessage: (message: string, type?: 'ok' | 'error') => void
   onRemove: (id: string) => void
@@ -49,6 +50,7 @@ function requestModeLabel(task: GenerationTask) {
 export function TaskQueue({
   tasks,
   onUploadImage,
+  onPublishWork,
   onUseAsReference,
   onMessage,
   onRemove,
@@ -120,6 +122,7 @@ export function TaskQueue({
               resolution={task.resolution}
               size={task.size}
               onUploadImage={(result) => onUploadImage(task.id, result)}
+              onPublishWork={(result) => onPublishWork(task.id, result)}
               onUseAsReference={onUseAsReference}
               onMessage={onMessage}
             />

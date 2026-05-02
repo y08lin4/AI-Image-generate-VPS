@@ -109,6 +109,33 @@ export interface AdminDailyReport {
   failureReasons: AdminFailureReason[]
 }
 
+export interface AuthUser {
+  id: number
+  username: string
+  createdAt: number
+}
+
+export interface WorkItem {
+  id: number
+  userId: number
+  username: string
+  title: string
+  prompt: string
+  imageUrl: string
+  thumbUrl?: string
+  createdAt: number
+  likeCount: number
+  likedByMe: boolean
+}
+
+export interface UserProfile {
+  id: number
+  username: string
+  createdAt: number
+  worksCount: number
+  likesReceived: number
+}
+
 export interface GenerateSuccessResponse {
   ok: true
   mode: Mode

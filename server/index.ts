@@ -162,6 +162,59 @@ interface DailyTaskStatRow {
   error: string | null
 }
 
+interface AuthPayload {
+  username?: string
+  password?: string
+}
+
+interface CreateWorkPayload {
+  title?: string
+  prompt?: string
+  imageUrl?: string
+  thumbUrl?: string
+}
+
+interface UserRow {
+  id: number
+  username: string
+  password_hash: string
+  created_at: number
+}
+
+interface SessionUserRow {
+  id: number
+  username: string
+  created_at: number
+  expires_at: number
+  last_seen_at: number
+}
+
+interface WorkListRow {
+  id: number
+  user_id: number
+  username: string
+  title: string
+  prompt: string
+  image_url: string
+  thumb_url: string | null
+  created_at: number
+  like_count: number
+  liked_by_me: number
+}
+
+interface WorkDetailRow extends WorkListRow {
+  works_count: number
+  likes_received: number
+}
+
+interface UserProfileRow {
+  id: number
+  username: string
+  created_at: number
+  works_count: number
+  likes_received: number
+}
+
 const SIZE_MAP: Record<Exclude<ResolutionTier, 'auto'>, Record<Ratio, string>> = {
   standard: {
     '1:1': '1024x1024',
@@ -194,13 +247,16 @@ const SIZE_MAP: Record<Exclude<ResolutionTier, 'auto'>, Record<Ratio, string>> =
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, X-Admin-Password, Authorization',
 }
 
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
 const PIXHOST_MAX_BYTES = 10 * 1024 * 1024
 const PIXHOST_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif'])
+const SESSION_COOKIE_NAME = 'ai_session'
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const SESSION_TOUCH_INTERVAL_MS = 10 * 60 * 1000
 
 const taskPayloadCache = new Map<string, WorkflowPayload>()
 const pendingTaskQueue: string[] = []
@@ -211,6 +267,7 @@ const config = loadConfig()
 const db = createDatabase(config.dbPath)
 setupSchema(db)
 markInterruptedTasksAsFailed(db)
+deleteExpiredSessions(db)
 const runtimeState = {
   accessPassword: initializeAccessPassword(db, config.initialAccessPassword),
 }
@@ -263,6 +320,165 @@ app.post('/api/admin/access-password', (req, res) => {
   runtimeState.accessPassword = newPassword
   saveAccessPassword(db, newPassword)
   return json(res, { ok: true, message: '访问密码已更新' })
+})
+
+app.post('/api/auth/register', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const payload = req.body as AuthPayload
+  const username = normalizeUsername(payload?.username)
+  const password = String(payload?.password || '')
+
+  const usernameError = validateUsername(username)
+  if (usernameError) return jsonError(res, 'bad_request', usernameError, 400)
+  const passwordError = validateUserPassword(password)
+  if (passwordError) return jsonError(res, 'bad_request', passwordError, 400)
+
+  try {
+    const user = createUser(db, username, password)
+    const token = createUserSession(db, user.id)
+    setSessionCookie(res, token)
+    return json(res, { ok: true, user }, 201)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'register failed'
+    if (/unique/i.test(message)) return jsonError(res, 'bad_request', '用户名已存在', 409)
+    return jsonError(res, 'internal_error', message, 500)
+  }
+})
+
+app.post('/api/auth/login', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const payload = req.body as AuthPayload
+  const username = normalizeUsername(payload?.username)
+  const password = String(payload?.password || '')
+
+  if (!username || !password) return jsonError(res, 'bad_request', '请输入用户名和密码', 400)
+
+  const user = findUserByUsername(db, username)
+  if (!user || !verifyUserPassword(password, user.password_hash)) {
+    return jsonError(res, 'auth_error', '用户名或密码错误', 401)
+  }
+
+  const token = createUserSession(db, user.id)
+  setSessionCookie(res, token)
+  return json(res, { ok: true, user: toPublicUser(user) })
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const token = getSessionTokenFromRequest(req)
+  if (token) deleteUserSession(db, token)
+  clearSessionCookie(res)
+  return json(res, { ok: true })
+})
+
+app.get('/api/auth/me', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const user = getOptionalUserFromRequest(db, req)
+  if (!user && getSessionTokenFromRequest(req)) clearSessionCookie(res)
+  return json(res, { ok: true, user })
+})
+
+app.post('/api/works', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const user = getOptionalUserFromRequest(db, req)
+  if (!user) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const payload = req.body as CreateWorkPayload
+  const normalized = normalizeCreateWorkPayload(payload)
+  if (normalized.error) return jsonError(res, 'bad_request', normalized.error, 400)
+
+  const work = createWork(db, user.id, normalized.value)
+  if (!work) return jsonError(res, 'internal_error', '发布成功但读取作品失败', 500)
+  return json(res, { ok: true, work }, 201)
+})
+
+app.get('/api/works', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  const limit = clamp(Number(req.query.limit), 1, 100, 20)
+  const offset = clamp(Number(req.query.offset), 0, 200000, 0)
+  const works = listWorks(db, limit, offset, me?.id)
+  const total = countWorks(db)
+  return json(res, { ok: true, works, total, limit, offset })
+})
+
+app.get('/api/works/:id', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+
+  const work = getWorkById(db, workId, me?.id)
+  if (!work) return jsonError(res, 'bad_request', '作品不存在', 404)
+  return json(res, { ok: true, work })
+})
+
+app.post('/api/works/:id/like', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  if (!workExists(db, workId)) return jsonError(res, 'bad_request', '作品不存在', 404)
+
+  addWorkLike(db, workId, me.id)
+  return json(res, { ok: true })
+})
+
+app.delete('/api/works/:id/like', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  if (!me) return jsonError(res, 'auth_error', '请先登录', 401)
+
+  const workId = Number(req.params.id)
+  if (!Number.isInteger(workId) || workId <= 0) return jsonError(res, 'bad_request', '作品 ID 无效', 400)
+  removeWorkLike(db, workId, me.id)
+  return json(res, { ok: true })
+})
+
+app.get('/api/users/:id', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const userId = Number(req.params.id)
+  if (!Number.isInteger(userId) || userId <= 0) return jsonError(res, 'bad_request', '用户 ID 无效', 400)
+
+  const profile = getUserProfile(db, userId)
+  if (!profile) return jsonError(res, 'bad_request', '用户不存在', 404)
+  return json(res, { ok: true, user: profile })
+})
+
+app.get('/api/users/:id/works', (req, res) => {
+  const authError = requireAccessPassword(req, config, runtimeState)
+  if (authError) return jsonError(res, authError.type, authError.message, authError.status)
+
+  const me = getOptionalUserFromRequest(db, req)
+  const userId = Number(req.params.id)
+  if (!Number.isInteger(userId) || userId <= 0) return jsonError(res, 'bad_request', '用户 ID 无效', 400)
+
+  const limit = clamp(Number(req.query.limit), 1, 100, 20)
+  const offset = clamp(Number(req.query.offset), 0, 200000, 0)
+  const works = listWorksByUser(db, userId, limit, offset, me?.id)
+  return json(res, { ok: true, works, limit, offset })
 })
 
 app.post('/api/generate-stream', async (req, res) => {
@@ -702,6 +918,360 @@ function verifyAdminPasswordValue(value: string | undefined, appConfig: AppConfi
 function requireAdminPassword(request: Request, appConfig: AppConfig) {
   const provided = extractPasswordFromRequest(request, 'x-admin-password')
   return verifyAdminPasswordValue(provided, appConfig)
+}
+
+function normalizeUsername(value: unknown) {
+  return String(value || '').trim()
+}
+
+function validateUsername(username: string) {
+  if (!username) return '用户名不能为空'
+  if (username.length < 3 || username.length > 24) return '用户名长度需在 3-24 个字符之间'
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) return '用户名只能包含字母、数字、下划线'
+  return ''
+}
+
+function validateUserPassword(password: string) {
+  if (!password) return '密码不能为空'
+  if (password.length < 6 || password.length > 72) return '密码长度需在 6-72 个字符之间'
+  return ''
+}
+
+function hashUserPassword(password: string) {
+  const salt = crypto.randomBytes(16).toString('hex')
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex')
+  return `scrypt$${salt}$${derived}`
+}
+
+function verifyUserPassword(password: string, storedHash: string) {
+  const parts = String(storedHash || '').split('$')
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false
+  const [, salt, expectedHex] = parts
+  if (!salt || !expectedHex) return false
+  try {
+    const derived = crypto.scryptSync(password, salt, 64).toString('hex')
+    const left = Buffer.from(derived, 'hex')
+    const right = Buffer.from(expectedHex, 'hex')
+    if (left.length !== right.length) return false
+    return crypto.timingSafeEqual(left, right)
+  } catch {
+    return false
+  }
+}
+
+function createUser(database: DatabaseSync, username: string, password: string) {
+  const now = Date.now()
+  const hash = hashUserPassword(password)
+  const result = database.prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)').run(username, hash, now) as { lastInsertRowid: number | bigint }
+  const id = Number(result.lastInsertRowid)
+  return { id, username, createdAt: now }
+}
+
+function findUserByUsername(database: DatabaseSync, username: string) {
+  return database.prepare('SELECT id, username, password_hash, created_at FROM users WHERE username = ? COLLATE NOCASE').get(username) as UserRow | undefined
+}
+
+function toPublicUser(user: Pick<UserRow, 'id' | 'username' | 'created_at'>) {
+  return {
+    id: Number(user.id),
+    username: user.username,
+    createdAt: Number(user.created_at),
+  }
+}
+
+function createSessionToken() {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+function hashSessionToken(token: string) {
+  return crypto.createHash('sha256').update(token).digest('hex')
+}
+
+function createUserSession(database: DatabaseSync, userId: number) {
+  const now = Date.now()
+  const token = createSessionToken()
+  const tokenHash = hashSessionToken(token)
+  const expiresAt = now + SESSION_TTL_MS
+
+  deleteExpiredSessions(database, now)
+  database
+    .prepare('INSERT INTO user_sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)')
+    .run(tokenHash, userId, expiresAt, now, now)
+  return token
+}
+
+function deleteUserSession(database: DatabaseSync, token: string) {
+  const hash = hashSessionToken(token)
+  database.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(hash)
+}
+
+function deleteExpiredSessions(database: DatabaseSync, now = Date.now()) {
+  database.prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(now)
+}
+
+function parseCookieHeader(header: string | undefined) {
+  const out: Record<string, string> = {}
+  if (!header) return out
+  const parts = header.split(';')
+  for (const part of parts) {
+    const index = part.indexOf('=')
+    if (index <= 0) continue
+    const name = part.slice(0, index).trim()
+    const value = part.slice(index + 1).trim()
+    if (!name) continue
+    try {
+      out[name] = decodeURIComponent(value)
+    } catch {
+      out[name] = value
+    }
+  }
+  return out
+}
+
+function getSessionTokenFromRequest(request: Request) {
+  const cookieHeader = Array.isArray(request.headers.cookie) ? request.headers.cookie.join(';') : request.headers.cookie
+  const cookies = parseCookieHeader(cookieHeader)
+  return String(cookies[SESSION_COOKIE_NAME] || '').trim()
+}
+
+function appendSetCookieHeader(res: ExpressResponse, cookieValue: string) {
+  const previous = res.getHeader('Set-Cookie')
+  if (!previous) {
+    res.setHeader('Set-Cookie', cookieValue)
+    return
+  }
+  if (Array.isArray(previous)) {
+    res.setHeader('Set-Cookie', [...previous.map((item) => String(item)), cookieValue])
+    return
+  }
+  res.setHeader('Set-Cookie', [String(previous), cookieValue])
+}
+
+function serializeCookie(name: string, value: string, options: { maxAgeSec?: number; expires?: Date; httpOnly?: boolean; secure?: boolean; sameSite?: 'Lax' | 'Strict' | 'None'; path?: string }) {
+  const parts = [`${name}=${encodeURIComponent(value)}`]
+  parts.push(`Path=${options.path || '/'}`)
+  if (typeof options.maxAgeSec === 'number') parts.push(`Max-Age=${Math.max(0, Math.floor(options.maxAgeSec))}`)
+  if (options.expires) parts.push(`Expires=${options.expires.toUTCString()}`)
+  if (options.httpOnly) parts.push('HttpOnly')
+  if (options.secure) parts.push('Secure')
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`)
+  return parts.join('; ')
+}
+
+function setSessionCookie(res: ExpressResponse, token: string) {
+  appendSetCookieHeader(res, serializeCookie(SESSION_COOKIE_NAME, token, {
+    maxAgeSec: Math.floor(SESSION_TTL_MS / 1000),
+    httpOnly: true,
+    sameSite: 'Lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  }))
+}
+
+function clearSessionCookie(res: ExpressResponse) {
+  appendSetCookieHeader(res, serializeCookie(SESSION_COOKIE_NAME, '', {
+    maxAgeSec: 0,
+    expires: new Date(0),
+    httpOnly: true,
+    sameSite: 'Lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  }))
+}
+
+function getOptionalUserFromRequest(database: DatabaseSync, request: Request) {
+  const token = getSessionTokenFromRequest(request)
+  if (!token) return null
+
+  const tokenHash = hashSessionToken(token)
+  const row = database.prepare(`SELECT u.id, u.username, u.created_at, s.expires_at, s.last_seen_at
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ?`)
+    .get(tokenHash) as SessionUserRow | undefined
+
+  if (!row) return null
+
+  const now = Date.now()
+  if (Number(row.expires_at) <= now) {
+    database.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(tokenHash)
+    return null
+  }
+
+  if (Number(row.last_seen_at) < now - SESSION_TOUCH_INTERVAL_MS) {
+    database.prepare('UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?').run(now, tokenHash)
+  }
+
+  return {
+    id: Number(row.id),
+    username: row.username,
+    createdAt: Number(row.created_at),
+  }
+}
+
+function normalizeCreateWorkPayload(payload: CreateWorkPayload) {
+  const title = String(payload?.title || '').trim()
+  const prompt = String(payload?.prompt || '').trim()
+  const imageUrl = String(payload?.imageUrl || '').trim()
+  const thumbUrlRaw = String(payload?.thumbUrl || '').trim()
+
+  if (!prompt) return { error: '提示词不能为空' } as const
+  if (prompt.length > 2000) return { error: '提示词最多 2000 字' } as const
+  if (!imageUrl) return { error: '图片地址不能为空' } as const
+  if (!isValidWorkImageUrl(imageUrl)) return { error: '图片地址格式无效' } as const
+  if (thumbUrlRaw && !isValidWorkImageUrl(thumbUrlRaw)) return { error: '缩略图地址格式无效' } as const
+
+  const normalizedTitle = title || buildDefaultWorkTitle(prompt)
+  if (normalizedTitle.length > 80) return { error: '标题最多 80 字' } as const
+
+  return {
+    value: {
+      title: normalizedTitle,
+      prompt,
+      imageUrl,
+      thumbUrl: thumbUrlRaw || undefined,
+    },
+  } as const
+}
+
+function buildDefaultWorkTitle(prompt: string) {
+  const clean = prompt.replace(/\s+/g, ' ').trim()
+  if (!clean) return '未命名作品'
+  return clean.length > 32 ? `${clean.slice(0, 32)}...` : clean
+}
+
+function isValidWorkImageUrl(value: string) {
+  if (/^data:image\//i.test(value)) return true
+  if (value.startsWith('/api/')) return true
+  return /^https?:\/\//i.test(value)
+}
+
+function createWork(database: DatabaseSync, userId: number, payload: { title: string; prompt: string; imageUrl: string; thumbUrl?: string }) {
+  const now = Date.now()
+  const result = database
+    .prepare('INSERT INTO works (user_id, title, prompt, image_url, thumb_url, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(userId, payload.title, payload.prompt, payload.imageUrl, payload.thumbUrl || null, now) as { lastInsertRowid: number | bigint }
+  const workId = Number(result.lastInsertRowid)
+  return getWorkById(database, workId, userId)
+}
+
+function mapWorkRow(row: WorkListRow) {
+  return {
+    id: Number(row.id),
+    userId: Number(row.user_id),
+    username: row.username,
+    title: row.title,
+    prompt: row.prompt,
+    imageUrl: row.image_url,
+    thumbUrl: row.thumb_url || undefined,
+    createdAt: Number(row.created_at),
+    likeCount: Number(row.like_count || 0),
+    likedByMe: Number(row.liked_by_me || 0) > 0,
+  }
+}
+
+function countWorks(database: DatabaseSync) {
+  const row = database.prepare('SELECT COUNT(*) as total FROM works').get() as { total: number }
+  return Number(row?.total || 0)
+}
+
+function listWorks(database: DatabaseSync, limit: number, offset: number, viewerUserId?: number) {
+  const viewerId = Number(viewerUserId || 0)
+  const rows = database.prepare(`SELECT
+      w.id,
+      w.user_id,
+      u.username,
+      w.title,
+      w.prompt,
+      w.image_url,
+      w.thumb_url,
+      w.created_at,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+    FROM works w
+    JOIN users u ON u.id = w.user_id
+    ORDER BY w.created_at DESC
+    LIMIT ? OFFSET ?`).all(viewerId, limit, offset) as unknown as WorkListRow[]
+  return rows.map(mapWorkRow)
+}
+
+function listWorksByUser(database: DatabaseSync, userId: number, limit: number, offset: number, viewerUserId?: number) {
+  const viewerId = Number(viewerUserId || 0)
+  const rows = database.prepare(`SELECT
+      w.id,
+      w.user_id,
+      u.username,
+      w.title,
+      w.prompt,
+      w.image_url,
+      w.thumb_url,
+      w.created_at,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+    FROM works w
+    JOIN users u ON u.id = w.user_id
+    WHERE w.user_id = ?
+    ORDER BY w.created_at DESC
+    LIMIT ? OFFSET ?`).all(viewerId, userId, limit, offset) as unknown as WorkListRow[]
+  return rows.map(mapWorkRow)
+}
+
+function getWorkById(database: DatabaseSync, workId: number, viewerUserId?: number) {
+  const viewerId = Number(viewerUserId || 0)
+  const row = database.prepare(`SELECT
+      w.id,
+      w.user_id,
+      u.username,
+      w.title,
+      w.prompt,
+      w.image_url,
+      w.thumb_url,
+      w.created_at,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id) AS like_count,
+      (SELECT COUNT(*) FROM work_likes wl WHERE wl.work_id = w.id AND wl.user_id = ?) AS liked_by_me
+    FROM works w
+    JOIN users u ON u.id = w.user_id
+    WHERE w.id = ?`)
+    .get(viewerId, workId) as WorkListRow | undefined
+  return row ? mapWorkRow(row) : null
+}
+
+function workExists(database: DatabaseSync, workId: number) {
+  const row = database.prepare('SELECT 1 as yes FROM works WHERE id = ?').get(workId) as { yes: number } | undefined
+  return Boolean(row?.yes)
+}
+
+function addWorkLike(database: DatabaseSync, workId: number, userId: number) {
+  const now = Date.now()
+  database
+    .prepare(`INSERT INTO work_likes (work_id, user_id, created_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(work_id, user_id) DO NOTHING`)
+    .run(workId, userId, now)
+}
+
+function removeWorkLike(database: DatabaseSync, workId: number, userId: number) {
+  database.prepare('DELETE FROM work_likes WHERE work_id = ? AND user_id = ?').run(workId, userId)
+}
+
+function getUserProfile(database: DatabaseSync, userId: number) {
+  const row = database.prepare(`SELECT
+      u.id,
+      u.username,
+      u.created_at,
+      (SELECT COUNT(*) FROM works w WHERE w.user_id = u.id) AS works_count,
+      (SELECT COUNT(*) FROM work_likes wl JOIN works w2 ON w2.id = wl.work_id WHERE w2.user_id = u.id) AS likes_received
+    FROM users u
+    WHERE u.id = ?`).get(userId) as UserProfileRow | undefined
+
+  if (!row) return null
+  return {
+    id: Number(row.id),
+    username: row.username,
+    createdAt: Number(row.created_at),
+    worksCount: Number(row.works_count || 0),
+    likesReceived: Number(row.likes_received || 0),
+  }
 }
 
 function normalizePayload(payload: GeneratePayload, appConfig: AppConfig): NormalizedPayload {
@@ -1163,6 +1733,7 @@ function createDatabase(dbPath: string) {
   const dir = path.dirname(dbPath)
   fs.mkdirSync(dir, { recursive: true })
   const instance = new DatabaseSync(dbPath)
+  instance.exec('PRAGMA foreign_keys = ON')
   instance.exec('PRAGMA journal_mode = WAL')
   instance.exec('PRAGMA busy_timeout = 5000')
   return instance
@@ -1214,6 +1785,44 @@ function setupSchema(database: DatabaseSync) {
       PRIMARY KEY (task_id, result_index, chunk_index)
     )`,
     'CREATE INDEX IF NOT EXISTS idx_task_image_chunks_created_at ON task_image_chunks(created_at)',
+    `CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC)',
+    `CREATE TABLE IF NOT EXISTS user_sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)',
+    `CREATE TABLE IF NOT EXISTS works (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      thumb_url TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_works_created_at ON works(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_works_user_created_at ON works(user_id, created_at DESC)',
+    `CREATE TABLE IF NOT EXISTS work_likes (
+      work_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (work_id, user_id),
+      FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_work_likes_user ON work_likes(user_id, created_at DESC)',
   ]
 
   for (const statement of statements) database.prepare(statement).run()
